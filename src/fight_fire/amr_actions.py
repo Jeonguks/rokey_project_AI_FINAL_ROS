@@ -76,7 +76,7 @@ class RobotActionLib:
         initial_pose.header.frame_id = 'map'
         initial_pose.header.stamp = self.navigator.get_clock().now().to_msg()
         initial_pose.pose.position.x = -0.117279
-        initial_pose.pose.position.y = 0.019437
+        initial_pose.pose.position.y = 0.019432
         initial_pose.pose.orientation.z = -0.771297
         initial_pose.pose.orientation.w = 0.636474
 
