@@ -62,6 +62,20 @@ class RobotActionLib:
         # 1) Navigator
         # ---------------------------------------------------------
         self.navigator = TurtleBot4Navigator()
+        
+        self.initial_pose_robot2 = {
+            "x": 3.710208,
+            "y": 2.242908,
+            "qz": 0.6096358,
+            "qw": 0.7926816,
+        }
+        self.initial_pose_robot6 = {
+                "x": -0.117279,
+                "y": 0.019432,
+                "qz": -0.771297,
+                "qw": 0.636474,
+        }
+
 
         # 도킹 상태 확인 (예외 방지)
         try:
@@ -72,13 +86,23 @@ class RobotActionLib:
             self.node.get_logger().warn(f"[ActionLib] Dock status check failed: {e}")
 
         # AMCL 초기 위치 설정
-        initial_pose = PoseStamped()
-        initial_pose.header.frame_id = 'map'
-        initial_pose.header.stamp = self.navigator.get_clock().now().to_msg()
-        initial_pose.pose.position.x = -0.117279
-        initial_pose.pose.position.y = 0.019432
-        initial_pose.pose.orientation.z = -0.771297
-        initial_pose.pose.orientation.w = 0.636474
+        if self.namespace == "/robot2":
+            initial_pose = PoseStamped()
+            initial_pose.header.frame_id = 'map'
+            initial_pose.header.stamp = self.navigator.get_clock().now().to_msg()
+            initial_pose.pose.position.x = self.initial_pose_robot2["x"]
+            initial_pose.pose.position.y = self.initial_pose_robot2["y"]
+            initial_pose.pose.orientation.z = self.initial_pose_robot2["qz"]
+            initial_pose.pose.orientation.w = self.initial_pose_robot2["qw"]
+        else:
+            initial_pose = PoseStamped()
+            initial_pose.header.frame_id = 'map'
+            initial_pose.header.stamp = self.navigator.get_clock().now().to_msg()
+            initial_pose.pose.position.x = self.initial_pose_robot6["x"]
+            initial_pose.pose.position.y = self.initial_pose_robot6["y"]
+            initial_pose.pose.orientation.z = self.initial_pose_robot6["qz"]
+            initial_pose.pose.orientation.w = self.initial_pose_robot6["qw"]
+
 
         self.navigator.setInitialPose(initial_pose)
 
@@ -167,6 +191,14 @@ class RobotActionLib:
     def do_dock(self):
         self.node.get_logger().info("Action: Docking...")
         self.navigator.dock()
+
+    def go_home(self):
+        if self.namespace == "/robot2":
+            goal_pose = self.navigator.getPoseStamped([self.initial_pose_robot2["x"], self.initial_pose_robot2["y"]], TurtleBot4Directions.NORTH)
+            self.navigator.startToPose(goal_pose)
+        else:
+            goal_pose = self.navigator.getPoseStamped([self.initial_pose_robot6["x"], self.initial_pose_robot6["y"]], TurtleBot4Directions.NORTH)
+            self.navigator.startToPose(goal_pose)
 
     def move_to_wp_b1(self):
         self.node.get_logger().info("Action: Moving to WP_B1")
