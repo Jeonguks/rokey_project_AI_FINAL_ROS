@@ -50,6 +50,8 @@ class PerceptionNode(Node):
             depth=1,
             durability=DurabilityPolicy.VOLATILE
         )
+
+
         
         # RGB & Depth 동기화 구독
         self.rgb_sub = message_filters.Subscriber(
@@ -73,7 +75,8 @@ class PerceptionNode(Node):
         self.detection_pub = self.create_publisher(String, 'perception/detections', 10)
         
         # 디버깅용 이미지
-        self.debug_pub = self.create_publisher(CompressedImage, f'/{self.namespace}/yolo_debug', 10)
+        # [수정] 디버깅용 이미지 (일반 Image 메시지로 변경)
+        self.debug_pub = self.create_publisher(Image, f'/{self.namespace}/yolo_debug', 10)
         
         # RViz 시각화용 마커 (Down 객체 등 표시)
         self.marker_pub = self.create_publisher(Marker, f'/{self.namespace}/detection_marker', 10)
@@ -180,12 +183,17 @@ class PerceptionNode(Node):
                 # 로그는 너무 자주 찍히면 보기 힘드니 필요시 주석 해제
                 # self.get_logger().info(f"Broadcast: {json_str}")
 
-            # 5. 디버그 이미지 발행
-            # small_frame = cv2.resize(frame, (0, 0), fx=0.5, fy=0.5)
-            # out_msg = self.cv_bridge.cv2_to_compressed_imgmsg(small_frame)
-            out_msg = self.cv_bridge.cv2_to_compressed_imgmsg(frame)
+            # 5. 디버그 이미지 발행 (Raw Image로 변경)
+            out_msg = self.cv_bridge.cv2_to_imgmsg(frame, encoding="bgr8")
+            
+            # [중요] 헤더 정보 추가 (RViz에서 깜빡임 방지 및 시간 동기화)
+            # 원본 이미지의 시간을 그대로 쓰는 것이 가장 정확합니다.
+            out_msg.header.frame_id = self.camera_frame_id 
+            out_msg.header.stamp = rgb_msg.header.stamp 
+            
             self.debug_pub.publish(out_msg)
-            self.get_logger().info("222222222222222222222222222222222")
+            self.get_logger().info("📸 디버그 이미지(Raw) 발행 완료")
+
 
         except Exception as e:
             self.get_logger().error(f'Processing Error: {e}')
