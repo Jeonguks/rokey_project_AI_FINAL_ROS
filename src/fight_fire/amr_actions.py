@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import time
 
+import rclpy
 from rclpy.node import Node
 from rclpy.duration import Duration
 
@@ -76,8 +77,8 @@ class RobotActionLib:
                 "qw": 0.636474,
         }
         self.predock_pose_robot2 = {
-            "x": 3.16,
-            "y": 1.87,
+            "x": 3.70,
+            "y": 2.00,
             "qz": 0.6096358,
             "qw": 0.7926816,
         }
@@ -267,16 +268,46 @@ class RobotActionLib:
         t.linear.x = float(linear_x)
         self.cmd_vel_pub.publish(t)
 
-    def stop_robot(self):
-        # 기존 유지 + cmd_vel 0
-        try:
-            self.navigator.cancelTask()
-        except Exception:
-            pass
-        self.cmd_vel_pub.publish(Twist())
     # =========================================================
     # Utility
     # =========================================================
+    ##############################################################################
+    # 프리토킹 + 도킹 실패시 예외처리
+    #################################################################################
+    def stop_and_alarm_forever(self,reason: str = "", beep_period: float = 1.0):
+        """
+        도킹 실패/위험 상황: 로봇 정지 + 경고음 반복 + 무한 대기
+        beep_period: 몇 초마다 삐-삐 할지
+        """
+        # 1) 정지/취소
+        try:
+            if hasattr(self, "navigator") and hasattr(self.navigator, "cancelTask"):
+                self.navigator.cancelTask()
+        except Exception:
+            pass
+
+        if reason:
+            self.node.get_logger().error(reason)
+
+        self.node.get_logger().error("[Fire] 도킹 실패 -> 안전 정지 + 경고음 반복(무한)")
+
+        # 2) 경고음 반복 (삐-삐)
+        next_beep = 0.0
+        while rclpy.ok():
+            now = time.time()
+            if now >= next_beep:
+                try:
+                    # 삐-삐(두 번)
+                    self.trigger_beep()
+                    time.sleep(0.15)
+                    self.trigger_beep()
+                except Exception as be:
+                    self.node.get_logger().warn(f"[Fire] beep 실패: {be}")
+                next_beep = now + beep_period
+
+            time.sleep(0.05)
+
+    ##################################################################################
     def trigger_beep(self):
         now = time.time()
         if now - self.last_beep_time < 10.0:
@@ -371,21 +402,35 @@ class RobotActionLib:
             # go_home + dock
             try:
                 self.go_predock()
-                # go_home이 startToPose 기반이면 완료 대기 필요
-                # 너 코드에 wait_for_nav 같은 게 있으면 그걸로 대기
-                if hasattr(self, "wait_for_nav"):
-                    self.wait_for_nav(timeout=120.0, step_name="go_predock")
+                self.wait_for_nav(timeout=30.0, step_name="predock") # 30초동안 프리도킹 위치로 이동 
             except Exception as he:
                 self.node.get_logger().warn(f"[Fire] go_predock 실패: {he}")
-
+                if hasattr(self, "navigator") and hasattr(self.navigator, "cancelTask"):
+                    self.navigator.cancelTask()
+            #도킹시도 
             try:
-                # 도킹 상태 확인 후 도킹
                 if not self.navigator.getDockedStatus():
                     self.navigator.dock()
+
+                # 도킹 완료 폴링(예: 30초)
+                t0 = time.time()
+                dock_timeout = 30.0
+                while time.time() - t0 < dock_timeout:
+                    if self.navigator.getDockedStatus():
+                        self.node.get_logger().info("[Fire] 도킹 완료")
+                        break
+                    time.sleep(0.2)
+                else:
+                    self.stop_and_alarm_forever(self, reason="[Fire] 도킹 타임아웃(미도킹 상태)")
+
             except Exception as de:
-                self.node.get_logger().warn(f"[Fire] dock 실패: {de}")
+                self.stop_and_alarm_forever(self, reason=f"[Fire] dock 실패: {de}")
 
             return False
+        
+
+
+
         # self.node.get_logger().info("[Fire] 정찰 회전")
         # self.perform_spin(duration=spin_duration)
         # self.wait_for_nav(timeout=spin_duration + 20.0, step_name="spin")

@@ -20,8 +20,8 @@ class PerceptionNode(Node):
     def __init__(self):
         super().__init__('perception_node')
         
-        self.namespace = 'robot6' 
-        self.model_path = '/home/rokey/datasets/weights/best_amr_v8n_param_add.pt'
+        self.namespace = 'robot6'  # default
+        self.model_path = 'yolov8n.pt'
         self.camera_frame_id = ""  
         self.last_process_time = 0.0 
         self.camera_intrinsics = None 

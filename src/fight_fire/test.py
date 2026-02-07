@@ -190,19 +190,37 @@ class FullSequenceTest(Node):
                     self.actions.stop_robot()
                     self.is_mission_running = False
                     self.get_logger().info("[Mission] done")
+
+
+
+
+
+
             
             elif code == "afbncn":
                 self.get_logger().warn("[Mission] code='afbccf' (아직 미구현)")
                 self._last_handled_code = code
                 self._last_handled_time = now
 
+
+
+
+
+
+
             else:
                 self.get_logger().info(f"[Mission] unknown code='{code}' -> ignore")
                 self._last_handled_code = code
                 self._last_handled_time = now
 
-            time.sleep(0.05)
 
+
+
+
+
+
+            time.sleep(0.05)
+    ##################################################################################################################33
 
 
 def main(args=None):
