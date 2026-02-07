@@ -1,11 +1,10 @@
-#!/usr/bin/env python3
 import time
 
 from rclpy.node import Node
 from rclpy.duration import Duration
 
 from geometry_msgs.msg import PoseStamped, Twist, Point
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, String
 from irobot_create_msgs.msg import AudioNoteVector, AudioNote
 
 from nav2_simple_commander.robot_navigator import TaskResult
@@ -94,6 +93,7 @@ class RobotActionLib:
 
         # 전역 토픽 유지(원하면 상대 토픽으로 변경 가능)
         self.help_pub = self.node.create_publisher(Point, '/signal/rotation6', 10)
+        self.moving_pub = self.node.create_publisher(String, 'incident_status', 10)
 
         self.fire_mode_pub = self.node.create_publisher(Bool, 'enable_fire_approach', 10)
         self.evac_pub = self.node.create_publisher(Bool, 'start_evacuation', 10)
@@ -145,8 +145,14 @@ class RobotActionLib:
 
         elif ns == "/robot6":
             # robot6 -> 장소 B 루트 (b1->b2)
+            self.moving_pub.publish(String(data="wp_b1 이동중"))
+            self.node.get_logger().info("📢 Publish: wp_b1 이동중")
             self.move_to_wp_b1(); self.wait_for_nav(step_name="wp_b1")
+            self.trigger_beep()
+            self.moving_pub.publish(String(data="wp_b2 이동중"))
+            self.node.get_logger().info("📢 Publish: wp_b2 이동중")
             self.move_to_wp_b2(); self.wait_for_nav(step_name="wp_b2")
+            self.trigger_beep()
 
         else:
             self.node.get_logger().warn(
