@@ -6,12 +6,14 @@ from rclpy.node import Node
 from rclpy.duration import Duration
 
 from geometry_msgs.msg import PoseStamped, Twist, Point
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool,String
 from irobot_create_msgs.msg import AudioNoteVector, AudioNote
 
 from nav2_simple_commander.robot_navigator import TaskResult
 from turtlebot4_navigation.turtlebot4_navigator import TurtleBot4Directions, TurtleBot4Navigator
 import math
+import json
+
 
 class State:
     IDLE = 0
@@ -67,8 +69,14 @@ class RobotActionLib:
         self.last_point = None
         self._help_handled = False
 
-
-
+        # [추가] YOLO 감지 결과를 받는 Subscriber
+        self.detection_sub = self.node.create_subscription(
+            String,
+            'perception/detections',
+            self.perception_callback,
+            10
+        )
+        #####################################################################################
         # ---------------------------------------------------------
         # 1) Navigator
         # ---------------------------------------------------------
@@ -142,14 +150,14 @@ class RobotActionLib:
         self.cmd_vel_pub = self.node.create_publisher(Twist, 'cmd_vel', 10)
         self.audio_pub = self.node.create_publisher(AudioNoteVector, 'cmd_audio', 10)
 
-        # 전역 토픽 유지(원하면 상대 토픽으로 변경 가능)
-        self.help_pub = self.node.create_publisher(Point, '/signal/rotation6', 10)
-
+        # 서버로 보낼 토픽 ##########################
         self.fire_mode_pub = self.node.create_publisher(Bool, 'enable_fire_approach', 10)
         self.evac_pub = self.node.create_publisher(Bool, 'start_evacuation', 10)
+        self.moving_pub = self.node.create_publisher(String, 'incident_status', 10)
+        #########################################
 
         self.last_beep_time = 0.0
-
+        
     # =========================================================
     # 공용: Nav2 완료 대기
     # =========================================================
@@ -239,6 +247,46 @@ class RobotActionLib:
 
         if self.state == State.FIND:
             self.guide_sequence()
+
+    def action_3(self):
+        '''
+        a방에 불나고 b방에 서있는 사람 afbpcn
+        혹은
+        b방에 불나고 a방에 서 있는 사람 apbfcn
+        '''
+        # A방 들어가기 -> go to a
+        # 회전 탐색 ( 첫번째방) -> 승호씨 코드 가져오기 
+        # 두번째방 이동 후 회전탐색 -> go to a in 
+        # 서있는 사람이 있으면 -> 회전 탐색 if 문 
+
+        #회전탐색#####################################################
+        
+        found = self.spin_and_search_fire(timeout=15.0)  
+        if found:
+            self.moving_pub.publish(String(data="화재 접근 중"))
+            # 찾은 상태에서 그대로 접근 시작
+            self.action_approach_fire()
+        else:
+            self.node.get_logger().warn("❌ 화재를 찾지 못해 접근 단계를 건너뜁니다.")    
+        
+
+        ############################################################
+        #--------------------------------------------------------
+        # 대피 가이드 -> 
+        # 일단 입구로 이동 
+        # 입구 이동후 확인 
+        # 3초마다 뒤돌기 도착할떄 까지 
+        # 대피 다시키면 ? 도움요청 없으면 복도 순회, 도움요청 있으면 도와주러 가기 -> 우선순위는 사람 대피  
+        #----------------------------------------------------------
+
+        # 끝나면 순회 
+
+
+        # TODO 객체 탐지 결과에 맞게 변수로 설정해야함 
+        # 서있는 사람 탐지 결과 받아야 하므로 cls = stand 
+
+
+    
 
 
     # =========================================================
@@ -427,7 +475,118 @@ class RobotActionLib:
         self.state = State.IDLE
 
 
+    # =========================================================
+    # [NEW] 회전하며 화재 탐색 (발견 시 즉시 중단)
+    # =========================================================
+    def spin_and_search_fire(self, timeout=15.0):
+        """
+        제자리에서 회전하며 화재('fire')를 찾습니다.
+        화재가 발견되면(self.target_fire is not None) 즉시 회전을 멈추고 True를 반환합니다.
+        못 찾고 timeout이 지나면 False를 반환합니다.
+        """
+        self.node.get_logger().info("🔄 [Action] 회전하며 화재 탐색 시작...")
+        
+        start_time = time.time()
+        
+        # 1. 회전 명령 (cmd_vel)
+        twist = Twist()
+        twist.angular.z = 0.5  # 회전 속도 (너무 빠르면 감지 못함)
+        
+        while time.time() - start_time < timeout:
+            # 화재 감지 확인
+            if self.target_fire is not None:
+                self.node.get_logger().info(f"🔥 [Action] 화재 발견! 회전 중단. (거리: {self.target_fire['dist']}m)")
+                self.stop_robot() # 즉시 정지
+                return True
+            
+            # 계속 회전
+            self.cmd_vel_pub.publish(twist)
+            time.sleep(0.1)
+            
+        self.stop_robot()
+        self.node.get_logger().warn("⚠️ [Action] 탐색 실패 (시간 초과)")
+        return False
 
+    def action_approach_fire(self):
+        """
+        1. 화재 감지 대기
+        2. 화면 중앙 맞추기 (회전) & 1.0m까지 접근 (전진)
+        3. 도착 후 정지 및 30초 카운트다운
+        """
+        self.node.get_logger().info("🔥 [Action] 화재 접근 모드 시작. 화재를 찾습니다...")
+
+
+        #  접근 제어 루프 (PID 제어와 유사)
+        target_dist = 1.0  # 목표 거리 (미터)
+        tolerance = 0.05   # 거리 허용 오차 (±5cm)
+        center_tolerance = 20 # 픽셀 허용 오차
+
+        while rclpy.ok():
+            # 화재를 놓쳤을 경우 정지
+            if self.target_fire is None:
+                self.manual_forward(0.0)
+                continue
+
+            # 현재 데이터 가져오기
+            cx = self.target_fire['cx']
+            dist = self.target_fire['dist']
+
+            # --- (1) 회전 제어 (화면 중앙 맞추기) ---
+            center_x = self.img_width / 2
+            error_x = center_x - cx
+            
+            # 오차가 크면 회전 (P제어)
+            angular_z = 0.002 * error_x 
+            angular_z = max(min(angular_z, 0.4), -0.4) # 속도 제한
+
+            # 중앙에 거의 맞으면 회전 멈춤
+            if abs(error_x) < center_tolerance:
+                angular_z = 0.0
+
+            # --- (2) 거리 제어 (1m 맞추기) ---
+            linear_x = 0.0
+            
+            # 로봇이 대략 불을 바라보고 있을 때만 전진 (엉뚱한 곳으로 가는 것 방지)
+            if abs(error_x) < 100:
+                if dist > target_dist + tolerance:
+                    linear_x = 0.15  # 천천히 전진
+                elif dist < target_dist - tolerance:
+                    linear_x = -0.05 # 너무 가까우면 살짝 후진
+                else:
+                    # 목표 거리에 도달함!
+                    linear_x = 0.0
+                    angular_z = 0.0
+                    
+                    # 완전 정지 명령
+                    twist = Twist()
+                    self.cmd_vel_pub.publish(twist)
+                    self.node.get_logger().info(f"✅ [Action] 목표 지점 도착! (거리: {dist}m)")
+                    break
+
+            # 속도 명령 발행
+            twist = Twist()
+            twist.linear.x = float(linear_x)
+            twist.angular.z = float(angular_z)
+            self.cmd_vel_pub.publish(twist)
+            
+            time.sleep(0.1)
+
+        #  30초 대기 (진압 시뮬레이션)
+        self.node.get_logger().info("🧯 [Timer] 화재 진압 작업을 시작합니다. (30초 대기)")
+        
+        start_time = time.time()
+        while time.time() - start_time < 30.0:
+            elapsed = int(time.time() - start_time)
+            remaining = 30 - elapsed
+            
+            # 5초마다 로그 출력
+            if elapsed > 0 and elapsed % 5 == 0:
+                 self.node.get_logger().info(f"⏳ [Timer] 진압 중... {remaining}초 남음")
+            
+            time.sleep(1.0) # 1초씩 대기
+
+        self.node.get_logger().info("🎉 [Timer] 30초 경과! 화재 진압 완료.")
+        self.trigger_beep() # 완료 비프음
 
     # =========================================================
     # Utility
@@ -734,3 +893,23 @@ class RobotActionLib:
 
         self.pending_help = False
         self._help_handled = True
+
+    def perception_callback(self, msg):
+        #JSON 데이터를 파싱 parse
+
+        try:
+            detections = json.loads(msg.data)
+            found = False
+            
+            # 감지된 물체 중 'fire'가 있는지 확인
+            for obj in detections:
+                if obj['class'] == 'fire':
+                    self.target_fire = obj
+                    found = True
+                    break # 일단 하나만 잡습니다
+            
+            if not found:
+                self.target_fire = None
+                
+        except Exception as e:
+            self.node.get_logger().error(f"JSON 파싱 에러: {e}")
