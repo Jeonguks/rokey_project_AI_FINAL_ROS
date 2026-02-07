@@ -75,6 +75,18 @@ class RobotActionLib:
                 "qz": -0.771297,
                 "qw": 0.636474,
         }
+        self.predock_pose_robot2 = {
+            "x": 3.16,
+            "y": 1.87,
+            "qz": 0.6096358,
+            "qw": 0.7926816,
+        }
+        self.predock_pose_robot6 = {
+                "x": -0.00918,
+                "y": 0.004354,
+                "qz": -0.771297,
+                "qw": 0.636474,
+        }
 
 
         # 도킹 상태 확인 (예외 방지)
@@ -94,7 +106,7 @@ class RobotActionLib:
             initial_pose.pose.position.y = self.initial_pose_robot2["y"]
             initial_pose.pose.orientation.z = self.initial_pose_robot2["qz"]
             initial_pose.pose.orientation.w = self.initial_pose_robot2["qw"]
-        else:
+        elif self.namespace == "/robot6":
             initial_pose = PoseStamped()
             initial_pose.header.frame_id = 'map'
             initial_pose.header.stamp = self.navigator.get_clock().now().to_msg()
@@ -102,7 +114,8 @@ class RobotActionLib:
             initial_pose.pose.position.y = self.initial_pose_robot6["y"]
             initial_pose.pose.orientation.z = self.initial_pose_robot6["qz"]
             initial_pose.pose.orientation.w = self.initial_pose_robot6["qw"]
-
+        else:
+            self.node.get_logger().warn(f"Unknown namespace: {self.namespace}")
 
         self.navigator.setInitialPose(initial_pose)
 
@@ -179,7 +192,7 @@ class RobotActionLib:
             )
             return
 
-        self.node.get_logger().info("[Action2] done")
+        self.node.get_logger().info("[Action1] done")
 
     # =========================================================
     # Navigation Actions
@@ -192,12 +205,12 @@ class RobotActionLib:
         self.node.get_logger().info("Action: Docking...")
         self.navigator.dock()
 
-    def go_home(self):
+    def go_predock(self):
         if self.namespace == "/robot2":
-            goal_pose = self.navigator.getPoseStamped([self.initial_pose_robot2["x"], self.initial_pose_robot2["y"]], TurtleBot4Directions.NORTH)
+            goal_pose = self.navigator.getPoseStamped([self.predock_pose_robot2["x"], self.predock_pose_robot2["y"]], TurtleBot4Directions.NORTH)
             self.navigator.startToPose(goal_pose)
         else:
-            goal_pose = self.navigator.getPoseStamped([self.initial_pose_robot6["x"], self.initial_pose_robot6["y"]], TurtleBot4Directions.NORTH)
+            goal_pose = self.navigator.getPoseStamped([self.predock_pose_robot6["x"], self.predock_pose_robot6["y"]], TurtleBot4Directions.NORTH)
             self.navigator.startToPose(goal_pose)
 
     def move_to_wp_b1(self):
@@ -302,61 +315,133 @@ class RobotActionLib:
         - control_to_fire_fn: () -> bool   (접근 제어 1 step, 도착하면 True)
         """
         self.node.get_logger().info("[Fire] 정찰 회전")
-        self.perform_spin(duration=spin_duration)
-        self.wait_for_nav(timeout=spin_duration + 20.0, step_name="spin")
+        try:
+            # 1) Spin
+            self.perform_spin(duration=spin_duration)
+            self.wait_for_nav(timeout=spin_duration + 20.0, step_name="spin")
 
-        self.node.get_logger().info("[Fire] 화재 추적 시작")
-        start = time.time()
+            # 2) Chase loop
+            self.node.get_logger().info("[Fire] 화재 추적 시작")
+            start = time.time()
 
-        fire_engage_start = None   # 화재 접근 시작 시각
-        handover_sent = False      # 교대 요청 1회만 보내기
+            fire_engage_start = None
+            handover_sent = False
 
-        while True:
-            now = time.time()
+            while True:
+                now = time.time()
 
-            if now - start > chase_timeout:
-                self.node.get_logger().error("[Fire] 화재 접근 타임아웃!")
-                return False
+                if now - start > chase_timeout:
+                    raise TimeoutError("[Fire] 화재 접근 타임아웃")
 
-            locked = is_target_locked_fn()
+                locked = is_target_locked_fn()
 
-            # ============================
-            # 🔥 화재 진압 중 상태
-            # ============================
-            if locked:
+                if locked:
+                    if fire_engage_start is None:
+                        fire_engage_start = now
+                        self.node.get_logger().info("[Fire] engage start")
 
-                # 화재 처음 잡은 순간 시간 기록
-                if fire_engage_start is None:
-                    fire_engage_start = now
-                    self.node.get_logger().info("[Fire] engage start")
+                    if (not handover_sent) and (now - fire_engage_start >= 30.0):
+                        hx, hy = 3.18, -3.70
+                        self.send_help_point(hx, hy)
+                        self.trigger_beep()
+                        handover_sent = True
 
-                # 🔴 여기에 넣는거다
-                if (not handover_sent) and (now - fire_engage_start >= 30.0):
+                    if control_to_fire_fn():
+                        self.node.get_logger().info("[Fire] 화재 지점 도착!")
+                        return True
 
-                    # 교대 로봇이 와야 하는 위치
-                    hx, hy = 3.18, -3.70   # 또는 현재 로봇 위치
+                else:
+                    self.manual_rotate(rotate_speed)
+                    fire_engage_start = None
+                    handover_sent = False
 
-                    self.send_help_point(hx, hy)
-                    self.trigger_beep()
+                time.sleep(0.1)
 
-                    handover_sent = True
+        except Exception as e:
+            # 여기서 “추후 동작 실패”를 전부 잡음 (timeout 포함)
+            self.node.get_logger().error(f"[Fire] 실패로 인해 복귀/도킹 수행: {e}")
 
-                # 실제 접근 제어
-                if control_to_fire_fn():
-                    self.node.get_logger().info("[Fire] 화재 지점 도착!")
-                    return True
+            # (선택) 진행 중인 네비/회전 stop/cancel이 있다면 먼저 호출
+            try:
+                if hasattr(self, "navigator") and hasattr(self.navigator, "cancelTask"):
+                    self.navigator.cancelTask()
+            except Exception as ce:
+                self.node.get_logger().warn(f"[Fire] cancelTask 실패: {ce}")
 
-            # ============================
-            # 🔄 타겟 못잡은 상태 → 탐색
-            # ============================
-            else:
-                self.manual_rotate(rotate_speed)
+            # go_home + dock
+            try:
+                self.go_predock()
+                # go_home이 startToPose 기반이면 완료 대기 필요
+                # 너 코드에 wait_for_nav 같은 게 있으면 그걸로 대기
+                if hasattr(self, "wait_for_nav"):
+                    self.wait_for_nav(timeout=120.0, step_name="go_predock")
+            except Exception as he:
+                self.node.get_logger().warn(f"[Fire] go_predock 실패: {he}")
 
-                # 타겟 놓치면 진압 타이머 리셋
-                fire_engage_start = None
-                handover_sent = False
+            try:
+                # 도킹 상태 확인 후 도킹
+                if not self.navigator.getDockedStatus():
+                    self.navigator.dock()
+            except Exception as de:
+                self.node.get_logger().warn(f"[Fire] dock 실패: {de}")
 
-            time.sleep(0.1)
+            return False
+        # self.node.get_logger().info("[Fire] 정찰 회전")
+        # self.perform_spin(duration=spin_duration)
+        # self.wait_for_nav(timeout=spin_duration + 20.0, step_name="spin")
+
+        # self.node.get_logger().info("[Fire] 화재 추적 시작")
+        # start = time.time()
+
+        # fire_engage_start = None   # 화재 접근 시작 시각
+        # handover_sent = False      # 교대 요청 1회만 보내기
+
+        # while True:
+        #     now = time.time()
+
+        #     if now - start > chase_timeout:
+        #         self.node.get_logger().error("[Fire] 화재 접근 타임아웃!")
+        #         return False
+
+        #     locked = is_target_locked_fn()
+
+        #     # ============================
+        #     # 🔥 화재 진압 중 상태
+        #     # ============================
+        #     if locked:
+
+        #         # 화재 처음 잡은 순간 시간 기록
+        #         if fire_engage_start is None:
+        #             fire_engage_start = now
+        #             self.node.get_logger().info("[Fire] engage start")
+
+        #         # 🔴 여기에 넣는거다
+        #         if (not handover_sent) and (now - fire_engage_start >= 30.0):
+
+        #             # 교대 로봇이 와야 하는 위치
+        #             hx, hy = 3.18, -3.70   # 또는 현재 로봇 위치
+
+        #             self.send_help_point(hx, hy)
+        #             self.trigger_beep()
+
+        #             handover_sent = True
+
+        #         # 실제 접근 제어
+        #         if control_to_fire_fn():
+        #             self.node.get_logger().info("[Fire] 화재 지점 도착!")
+        #             return True
+
+        #     # ============================
+        #     # 🔄 타겟 못잡은 상태 → 탐색
+        #     # ============================
+        #     else:
+        #         self.manual_rotate(rotate_speed)
+
+        #         # 타겟 놓치면 진압 타이머 리셋
+        #         fire_engage_start = None
+        #         handover_sent = False
+
+        #     time.sleep(0.1)
 
     def send_help_point(self, x, y):
         # 1) help=True 발행
