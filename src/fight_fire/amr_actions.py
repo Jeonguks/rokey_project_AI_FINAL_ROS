@@ -215,7 +215,7 @@ class RobotActionLib:
         goal_pose = self.navigator.getPoseStamped([3.1855, -3.7011], TurtleBot4Directions.NORTH)
         self.navigator.startToPose(goal_pose)
 
-    def perform_spin(self, duration=10.0):
+    def perform_spin(self, duration=10):
         self.node.get_logger().info("Action: Spinning")
         self.navigator.spin(spin_dist=6.28, time_allowance=duration)
 
