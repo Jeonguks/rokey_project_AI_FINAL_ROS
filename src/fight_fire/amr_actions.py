@@ -11,6 +11,17 @@ from irobot_create_msgs.msg import AudioNoteVector, AudioNote
 
 from nav2_simple_commander.robot_navigator import TaskResult
 from turtlebot4_navigation.turtlebot4_navigator import TurtleBot4Directions, TurtleBot4Navigator
+import math
+
+
+class State:
+    IDLE = 0
+    UNDOCKING = 1
+    MOVINGA = 2
+    SEARCHING = 3
+    GUIDING = 4
+    MOVINGAIN = 5
+    FIND=6
 
 
 class RobotActionLib:
@@ -63,6 +74,8 @@ class RobotActionLib:
         # 1) Navigator
         # ---------------------------------------------------------
         self.navigator = TurtleBot4Navigator()
+        # ✅ 과거 코드 호환: self.nav 를 쓰는 코드가 있어도 안 터지게
+        self.nav = self.navigator
         
         self.initial_pose_robot2 = {
             "x": 3.710208,
@@ -195,6 +208,40 @@ class RobotActionLib:
 
         self.node.get_logger().info("[Action1] done")
 
+    def action_2(self):
+        '''
+        나머지 한대는 불 끄러 간 상태 이 로봇은 
+        방에 가서 사람 있는지 확인 사람 있으면 
+        evacuation mode 
+        마지막 파인드 하면 비상구로 데려감 
+        '''
+
+        # 2. 탐색
+        self.node.get_logger().info("Starting Mission.")
+        target_found = self.go_to_A()
+        
+        if target_found:
+            self.state = State.SEARCHING
+            rotate_search = self.rotate_degree(-120.0)
+        else:
+            self.node.get_logger().info(f"A방 도착 실패{target_found}")
+
+        if rotate_search:
+            self.state = State.MOVINGAIN
+            self.go_to_A_in()
+        else:
+            self.node.get_logger().info(f"A방 안쪽 도착 실패")
+
+        if self.state == State.MOVINGAIN:
+            self.rotate_degree(-120.0)
+            self.state = State.FIND
+        else:
+            self.node.get_logger().info(f"탐색 실패")
+
+        if self.state == State.FIND:
+            self.guide_sequence()
+
+
     # =========================================================
     # Navigation Actions
     # =========================================================
@@ -267,6 +314,133 @@ class RobotActionLib:
         t = Twist()
         t.linear.x = float(linear_x)
         self.cmd_vel_pub.publish(t)
+    
+
+        # [1]회전 함수
+    def rotate_degree(self, degree:float):
+        rad = math.radians(degree)
+        self.node.get_logger().info(f"탐색을 위해 {degree}도 회전합니다...")
+
+        # time_allowance: 10초 안에 못 돌면 실패 처리
+        self.nav.spin(spin_dist=rad, time_allowance=10) 
+
+        # [중요] 회전이 끝날 때까지 기다리는 루프
+        while not self.nav.isTaskComplete():
+            # 피드백을 받아와서 로그를 찍어도 됩니다 (선택사항)
+            # feedback = self.navigator.getFeedback()
+            pass  # 다 돌 때까지 대기
+
+        # 결과 확인
+        result = self.nav.getResult()
+        
+        # TaskResult.SUCCEEDED와 비교해야 하지만, 간단히 성공 로그 출력
+        self.node.get_logger().info("회전 탐색 완료!")
+        return True
+
+
+    def go_to_A(self):
+        # Start on dock
+        if self.nav.getDockedStatus():
+            self.node.get_logger().info("🔌 Undocking first...")
+            self.nav.undock()
+
+        # Wait for Nav2
+        self.nav.waitUntilNav2Active()
+
+        # Set goal poses
+        goal_pose = []
+        goal_pose.append(self.nav.getPoseStamped([3.9223, -0.3839], TurtleBot4Directions.SOUTH_EAST))
+        goal_pose.append(self.nav.getPoseStamped([3.3106, -1.7768], TurtleBot4Directions.SOUTH_EAST))
+
+        # Navigate through poses
+        self.nav.startThroughPoses(goal_pose)
+
+        # 2. 도착할 때까지 기다리는 루프 (가장 중요!)
+        while not self.nav.isTaskComplete():
+            feedback = self.nav.getFeedback()
+            # 필요하다면 여기서 남은 거리 등을 로그로 찍을 수 있습니다.
+            # self.get_logger().info(f'이동 중... 남은 거리: {feedback.distance_remaining}')
+            
+            # 0.1초 정도 대기하며 루프 반복 (CPU 과부하 방지)
+            # rclpy.spin_once() 같은 처리가 필요할 수도 있음 (구조에 따라 다름)
+            pass
+
+        # 3. 루프가 끝나면(도착하거나 취소되면) 최종 결과 확인
+        result = self.nav.getResult()
+        
+        if result == TaskResult.SUCCEEDED:
+            self.node.get_logger().info("✅ A방 진입 완료 (성공)")
+            return True
+        elif result == TaskResult.CANCELED:
+            self.node.get_logger().info("⚠️ 이동 취소됨")
+            return False
+        elif result == TaskResult.FAILED:
+            self.node.get_logger().info("❌ 이동 실패 (경로 막힘 등)")
+            return False
+        else:
+            return False
+
+
+    def go_to_A_in(self):
+        goal_pose = self.nav.getPoseStamped([3.1855, -3.7011], TurtleBot4Directions.SOUTH_EAST)
+        self.nav.startToPose(goal_pose)
+
+
+    def guide_sequence(self):
+        self.node.get_logger().info("Step 3: Guiding to Evacuation Point...")
+        # evac_pose = self.create_pose(self.evac_point)
+        # self.nav.startToPose(evac_pose)
+        # goal_pose = self.nav.getPoseStamped([0.972021, 0.383458], TurtleBot4Directions.NORTH)
+        # self.nav.startToPose(goal_pose)
+        self.nav.waitUntilNav2Active()
+
+        # Set goal poses
+        goal_pose = []
+        goal_pose.append(self.nav.getPoseStamped([3.92, -1.09], TurtleBot4Directions.SOUTH_EAST))
+        goal_pose.append(self.nav.getPoseStamped([0.972021, 0.383458], TurtleBot4Directions.SOUTH_EAST))
+
+        # Navigate through poses
+        self.nav.startThroughPoses(goal_pose)
+
+        # 2. 도착할 때까지 기다리는 루프 (가장 중요!)
+        while not self.nav.isTaskComplete():
+            # feedback = self.nav.getFeedback()
+            pass
+
+        # 3. 루프가 끝나면(도착하거나 취소되면) 최종 결과 확인
+        result = self.nav.getResult()
+        
+        if result == TaskResult.SUCCEEDED:
+            self.node.get_logger().info("✅ 대피로 도착 (성공)")
+            return True
+        elif result == TaskResult.CANCELED:
+            self.node.get_logger().info("⚠️ 이동 취소됨")
+            return False
+        elif result == TaskResult.FAILED:
+            self.node.get_logger().info("❌ 이동 실패 (경로 막힘 등)")
+            return False
+        else:
+            return False
+        
+        last_check_time = time.time()
+        
+        # while not self.nav.isTaskComplete():
+        #     # 3초마다 확인
+        #     if time.time() - last_check_time > 3.0:
+        #         self.nav.cancelTask() # 잠시 멈춤
+                
+        #         self.check_follower()
+        #         # if not self.check_follower():
+        #         #     if not self.handle_lost_follower():
+        #         #         self.get_logger().error("사람을 완전히 놓쳤습니다. 미션 종료.")
+        #         #         return 
+                
+        #         self.get_logger().info("Resuming guide...")
+        #         self.nav.startToPose(evac_pose)
+        #         last_check_time = time.time()
+        
+        self.node.get_logger().info("✅ Mission Complete.")
+        self.state = State.IDLE
 
     # =========================================================
     # Utility

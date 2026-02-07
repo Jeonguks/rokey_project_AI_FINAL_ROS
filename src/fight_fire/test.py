@@ -58,17 +58,68 @@ class FullSequenceTest(Node):
         )
         self._mission_thread.start()
 
+    # ---------------------------------------------------------
+    # (NEW) detection list -> f/p/n 매핑
+    # ---------------------------------------------------------
+    def map_detection_to_code(self, detection_list):
+        """
+        detection_list 예: ["stand", "fire"]
+        우선순위:
+          - fire 있으면 'f'
+          - stand/down 있으면 'p'
+          - 그 외/비었으면 'n'
+        """
+        if not detection_list:
+            return "n"
+
+        s = set(detection_list)
+        if "fire" in s:
+            return "f"
+        if ("stand" in s) or ("down" in s):
+            return "p"
+        return "n"
+
+    def build_code_from_detection(self, data: dict) -> str:
+        """
+        data 예:
+        {
+            "class_a_detection": ["stand", "fire"],
+            "class_b_detection": ["fire"],
+            "class_c_detection": ["down"]
+        }
+        -> "afbfcp"
+        """
+        a_code = self.map_detection_to_code(data.get("class_a_detection", []))
+        b_code = self.map_detection_to_code(data.get("class_b_detection", []))
+        c_code = self.map_detection_to_code(data.get("class_c_detection", []))
+        return f"a{a_code}b{b_code}c{c_code}"
 
     # ---------------------------------------------------------
     # (A) /webcam_detected: 콜백은 코드 저장만!
     # ---------------------------------------------------------
     def trigger_callback(self, msg: String):
-        code = (msg.data or "").strip()
+        raw = (msg.data or "").strip()
+
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            self.get_logger().warn(f"[Trigger RX] invalid JSON: {raw[:120]}")
+            return
+
+        code = self.build_code_from_detection(data)
+
         with self._code_lock:
             self._latest_code = code
             self._latest_code_time = time.time()
 
-        self.get_logger().info(f"[Trigger RX] code='{code}'")
+        self.get_logger().info(f"[Trigger RX] json -> code='{code}' (raw={raw})")
+        
+        # code = (msg.data or "").strip()
+        # with self._code_lock:
+        #     self._latest_code = code
+        #     self._latest_code_time = time.time()
+
+        # self.get_logger().info(f"[Trigger RX] code='{code}'")
 
     def perception_callback(self, msg):
         """Perception Node가 보내주는 JSON 데이터를 해석"""
@@ -186,41 +237,40 @@ class FullSequenceTest(Node):
 
                 except Exception as e:
                     self.get_logger().error(f"[Mission] failed: {e}")
+                    self.actions.stop_robot()
+                    
                 finally:
                     self.actions.stop_robot()
                     self.is_mission_running = False
                     self.get_logger().info("[Mission] done")
-
-
-
-
-
-
             
-            elif code == "afbncn":
-                self.get_logger().warn("[Mission] code='afbccf' (아직 미구현)")
+            elif code == "apbfcn":
+                self.get_logger().warn("[Mission] code='afbccf' (사람구출하자)")
                 self._last_handled_code = code
                 self._last_handled_time = now
 
+                self.is_mission_running = True
 
+                try:
+                    # 1) 목적지 이동/도킹해제 루트
+                    self.actions.action_2()
 
-
-
-
+                except Exception as e:
+                    self.get_logger().error(f"[Mission] failed: {e}")
+                    self.actions.stop_robot()
+                    
+                finally:
+                    self.actions.stop_robot()
+                    self.is_mission_running = False
+                    self.get_logger().info("[Mission] done")
 
             else:
                 self.get_logger().info(f"[Mission] unknown code='{code}' -> ignore")
                 self._last_handled_code = code
                 self._last_handled_time = now
 
-
-
-
-
-
-
             time.sleep(0.05)
-    ##################################################################################################################33
+
 
 
 def main(args=None):
