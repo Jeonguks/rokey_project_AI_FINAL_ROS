@@ -13,7 +13,6 @@ from nav2_simple_commander.robot_navigator import TaskResult
 from turtlebot4_navigation.turtlebot4_navigator import TurtleBot4Directions, TurtleBot4Navigator
 import math
 
-
 class State:
     IDLE = 0
     UNDOCKING = 1
@@ -394,53 +393,41 @@ class RobotActionLib:
         # self.nav.startToPose(goal_pose)
         self.nav.waitUntilNav2Active()
 
+
+        pre_goal_pose = self.nav.getPoseStamped([3.92, -1.09], TurtleBot4Directions.SOUTH_EAST)
         # Set goal poses
-        goal_pose = []
-        goal_pose.append(self.nav.getPoseStamped([3.92, -1.09], TurtleBot4Directions.SOUTH_EAST))
-        goal_pose.append(self.nav.getPoseStamped([0.972021, 0.383458], TurtleBot4Directions.SOUTH_EAST))
+        self.wait_for_nav(step_name="wp_b1")
+        self.check_follower()
 
-        # Navigate through poses
-        self.nav.startThroughPoses(goal_pose)
+        goal_pose=self.nav.getPoseStamped([0.972021, 0.383458], TurtleBot4Directions.SOUTH_EAST) #대피소 좌표
+        self.navigator.startToPose(pre_goal_pose)
 
-        # 2. 도착할 때까지 기다리는 루프 (가장 중요!)
-        while not self.nav.isTaskComplete():
-            # feedback = self.nav.getFeedback()
-            pass
 
-        # 3. 루프가 끝나면(도착하거나 취소되면) 최종 결과 확인
-        result = self.nav.getResult()
-        
-        if result == TaskResult.SUCCEEDED:
-            self.node.get_logger().info("✅ 대피로 도착 (성공)")
-            return True
-        elif result == TaskResult.CANCELED:
-            self.node.get_logger().info("⚠️ 이동 취소됨")
-            return False
-        elif result == TaskResult.FAILED:
-            self.node.get_logger().info("❌ 이동 실패 (경로 막힘 등)")
-            return False
-        else:
-            return False
-        
+        feed_back = self.nav.getFeedback()
+
         last_check_time = time.time()
-        
-        # while not self.nav.isTaskComplete():
-        #     # 3초마다 확인
-        #     if time.time() - last_check_time > 3.0:
-        #         self.nav.cancelTask() # 잠시 멈춤
+        while feed_back.distance_remaining > 0.05:
+            # 3초마다 확인
+            if time.time() - last_check_time > 3.0:
+                self.nav.cancelTask() # 잠시 멈춤
                 
-        #         self.check_follower()
-        #         # if not self.check_follower():
-        #         #     if not self.handle_lost_follower():
-        #         #         self.get_logger().error("사람을 완전히 놓쳤습니다. 미션 종료.")
-        #         #         return 
+                self.check_follower()
+                if not self.check_follower():
+                    if not self.handle_lost_follower():
+                        self.get_logger().error("사람을 완전히 놓쳤습니다. 미션 종료.")
+                        return 
                 
-        #         self.get_logger().info("Resuming guide...")
-        #         self.nav.startToPose(evac_pose)
-        #         last_check_time = time.time()
+                self.get_logger().info("Resuming guide...")
+                last_check_time = time.time()
+                self.nav.startThroughPoses(goal_pose)
+            print("현재 이동 중")
+
         
         self.node.get_logger().info("✅ Mission Complete.")
         self.state = State.IDLE
+
+
+
 
     # =========================================================
     # Utility
@@ -602,7 +589,30 @@ class RobotActionLib:
 
             return False
         
+    def check_follower(self):
+        """뒤돌아보기 (Visual check)"""
+        self.get_logger().info("👀 Checking behind...")
+        
+        # [1] 180도(3.14 라디안) 회전
+        # 터틀봇4 네비게이터 사용 시
+        self.nav.spin(spin_dist=3.14, time_allowance=10)
+        while not self.nav.isTaskComplete():
+            pass
+        # [2] 회전이 끝난 후 잠시 대기 (카메라 초점/인식 안정화)
+        time.sleep(1.0)
+        
+        is_following = False
+        if self.is_stand_fresh(): # 1초동안 탐지됐나? TODO 추가 
+            self.get_logger().info("✅ Follower confirmed (Visual)")
+            is_following = True
+        else:
+            self.get_logger().warn("⚠️ No target visible!")
+        
+        self.nav.spin(spin_dist=3.14, time_allowance=10) # 혹은 -3.14
+        while not self.nav.isTaskComplete():
+            pass
 
+        return is_following
 
 
         # self.node.get_logger().info("[Fire] 정찰 회전")
