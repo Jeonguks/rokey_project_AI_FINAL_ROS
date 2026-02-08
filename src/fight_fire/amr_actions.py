@@ -287,13 +287,7 @@ class RobotActionLib:
 
 #####################################################
         
-        found = self.spin_and_search_fire(timeout=15.0)  
-        if found:
-            self.moving_pub.publish(String(data="화재 접근 중"))
-            # 찾은 상태에서 그대로 접근 시작
-            self.action_approach_fire()
-        else:
-            self.node.get_logger().warn("❌ 화재를 찾지 못해 접근 단계를 건너뜁니다.")    
+
         
 
         ############################################################
@@ -333,6 +327,23 @@ class RobotActionLib:
         pass
 
 
+    def action_6(self):
+        # 불끄고 30초 지나면 도와주러 오는지 테스트
+
+        found = self.spin_and_search_fire(timeout=15.0)  
+        if found:
+            self.moving_pub.publish(String(data="화재 접근 중"))
+            # 찾은 상태에서 그대로 접근 시작
+            self.action_approach_fire()
+            # 30초 경과후 도움요청
+            self.send_help_point()()
+            # 도움요청후 프리도킹 위치로 이동
+            self.go_predock()
+            # 도킹
+            self.do_dock()
+
+        else:
+            self.node.get_logger().warn("❌ 화재를 찾지 못해 접근 단계를 건너뜁니다.")    
 
 
 
@@ -479,6 +490,9 @@ class RobotActionLib:
         goal_pose = self.nav.getPoseStamped([3.1855, -3.7011], TurtleBot4Directions.SOUTH_EAST)
         self.nav.startToPose(goal_pose)
 
+    def go_to_A_enterence(self):
+        goal_pose = self.nav.getPoseStamped([3.92, -1.09], TurtleBot4Directions.SOUTH_EAST)
+        self.nav.startToPose(goal_pose)
 
     def guide_sequence(self):
         self.node.get_logger().info("Step 3: Guiding to Evacuation Point...")
@@ -695,10 +709,6 @@ class RobotActionLib:
         ]
         self.audio_pub.publish(msg)
 
-    def send_help_signal(self, x, y):
-        p = Point(x=float(x), y=float(y), z=0.0)
-        self.help_pub.publish(p)
-
     def fire_search_and_chase(
         self,
         is_target_locked_fn,
@@ -788,10 +798,10 @@ class RobotActionLib:
                         break
                     time.sleep(0.2)
                 else:
-                    self.stop_and_alarm_forever(self, reason="[Fire] 도킹 타임아웃(미도킹 상태)")
+                    self.stop_and_alarm_forever(reason="[Fire] 도킹 타임아웃(미도킹 상태)")
 
             except Exception as de:
-                self.stop_and_alarm_forever(self, reason=f"[Fire] dock 실패: {de}")
+                self.stop_and_alarm_forever(reason=f"[Fire] dock 실패: {de}")
 
             return False
         
@@ -960,3 +970,4 @@ class RobotActionLib:
                 
         except Exception as e:
             self.node.get_logger().error(f"JSON 파싱 에러: {e}")
+    

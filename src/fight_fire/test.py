@@ -1,16 +1,27 @@
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import String
+from std_msgs.msg import String,Bool
 from geometry_msgs.msg import Twist
 import threading
 import time
 import json
 from fight_fire.amr_actions import RobotActionLib
+from turtlebot4_navigation.turtlebot4_navigator import TurtleBot4Directions, TurtleBot4Navigator
 
 class FullSequenceTest(Node):
     def __init__(self):
         super().__init__('full_sequence_test_node')
-        
+
+        self.namespace = self.get_namespace() 
+        self.other_namespace = "/robot6"
+
+        if self.namespace == "/robot2":
+            self.other_namespace = "/robot6"
+        else:
+            self.other_namespace = "/robot2" 
+
+
+
         # ActionLib 연결
         self.actions = RobotActionLib(self)
         
@@ -27,6 +38,13 @@ class FullSequenceTest(Node):
             String,
             'perception/detections',
             self.perception_callback,
+            10
+        )
+        # 상대 로봇 요청 받을 때
+        self.help_signal_sub = self.create_subscription(
+            Bool,
+            f'{self.other_namespace}/signal/help',
+            self.get_help_trigger,
             10
         )
         
@@ -57,6 +75,10 @@ class FullSequenceTest(Node):
             daemon=True
         )
         self._mission_thread.start()
+
+        self._help_lock = threading.Lock()
+        self._help_requested = False
+        self._help_goal = None  # (x,y)
 
     # ---------------------------------------------------------
     # (NEW) detection list -> f/p/n 매핑
@@ -194,6 +216,14 @@ class FullSequenceTest(Node):
         self.get_logger().info("🧵 run_mission_sequence loop started")
 
         while rclpy.ok():
+            # ✅ help 인터럽트가 최우선
+            if self._interrupt_if_help():
+                # 도움 처리했으면, 기존 미션은 "중지"로 간주
+                self.is_mission_running = False
+                # 필요하면 상태 초기화도
+                self.target_locked = False
+                self.latest_fire_info = None
+
             with self._code_lock:
                 code = self._latest_code
                 code_time = self._latest_code_time
@@ -271,7 +301,60 @@ class FullSequenceTest(Node):
 
             time.sleep(0.05)
 
+    def get_help_trigger(self, msg: Bool):
+        if not msg.data:
+            return
+        # 좌표는 RobotActionLib 쪽에서 받는 last_point를 쓰거나,
+        # FullSequenceTest에서도 coordinate_sub를 하나 더 만들어도 됨.
+        # 여기선 "actions.last_point"를 신뢰한다고 가정.
+        if self.actions.last_point is None:
+            self.get_logger().warn("[HELP] help=True but no coordinate yet")
+            return
 
+        with self._help_lock:
+            self._help_requested = True
+            self._help_goal = self.actions.last_point  # (x,y)
+
+        self.get_logger().warn(f"[HELP] interrupt requested -> {self._help_goal}")
+
+    # FullSequenceTest 안에 추가
+    def _consume_help_request(self):
+        with self._help_lock:
+            if not self._help_requested or self._help_goal is None:
+                return None
+            goal = self._help_goal
+            self._help_requested = False
+            self._help_goal = None
+            return goal
+
+    def _interrupt_if_help(self) -> bool:
+        goal = self._consume_help_request()
+        if goal is None:
+            return False
+
+        hx, hy = goal
+        self.get_logger().warn(f"[HELP] INTERRUPT! cancel current task -> go ({hx:.3f},{hy:.3f})")
+
+        # 1) 현재 Nav2 task 취소
+        try:
+            self.actions.navigator.cancelTask()
+        except Exception:
+            pass
+
+        # 2) cmd_vel 완전 정지
+        try:
+            self.actions.cmd_vel_pub.publish(Twist())
+        except Exception:
+            pass
+
+        # 3) help 좌표로 이동 (Nav2)
+        goal_pose = self.actions.navigator.getPoseStamped([hx, hy], TurtleBot4Directions.NORTH)
+        self.actions.navigator.startToPose(goal_pose)
+
+        # 4) 도움 이동 완료까지 기다릴지/안기다릴지 정책
+        self.actions.wait_for_nav(timeout=90.0, step_name="help_goal")
+
+        return True
 
 def main(args=None):
     rclpy.init(args=args)
