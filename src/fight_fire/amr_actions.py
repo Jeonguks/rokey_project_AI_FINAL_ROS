@@ -754,9 +754,16 @@ class RobotActionLib:
         except Exception:
             pass
 
+        # msg.notes = [
+        #     AudioNote(frequency=880, max_runtime=Duration(seconds=0, nanoseconds=300000000).to_msg()),
+        #     AudioNote(frequency=440, max_runtime=Duration(seconds=0, nanoseconds=300000000).to_msg()),
+        # ]
         msg.notes = [
-            AudioNote(frequency=880, max_runtime=Duration(seconds=0, nanoseconds=300000000).to_msg()),
-            AudioNote(frequency=440, max_runtime=Duration(seconds=0, nanoseconds=300000000).to_msg()),
+            AudioNote(frequency=261, max_runtime=Duration(seconds=0, nanoseconds=300000000).to_msg()),
+            AudioNote(frequency=294, max_runtime=Duration(seconds=0, nanoseconds=300000000).to_msg()),
+            AudioNote(frequency=330, max_runtime=Duration(seconds=0, nanoseconds=300000000).to_msg()),
+            AudioNote(frequency=349, max_runtime=Duration(seconds=0, nanoseconds=300000000).to_msg()),
+            AudioNote(frequency=392, max_runtime=Duration(seconds=0, nanoseconds=300000000).to_msg()),
         ]
         self.audio_pub.publish(msg)
 
