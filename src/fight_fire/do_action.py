@@ -57,26 +57,24 @@ class DoActionNode(Node):
                 self.actions.trigger_beep_err()
             return False
 
-        search_ok = self.actions.spin_and_search_fire()
-        if search_ok:
-            self.actions.fire_search_and_chase()
-        # 3) 탐색
-        if not self.actions.spin_and_search_fire():
-            self.node.get_logger().warn("[Action1] 화재 탐색 실패 -> 도킹(또는 홈)")
-            self.actions.action_dock()
-            return False
+        # 3) 화재 진압 미션 수행 (탐색 -> 접근 -> 진압 -> 지원요청 -> 복귀)
+        self.node.get_logger().info("[Action1] 화재 진압 시퀀스 시작")
+        
+        # 이 함수 하나가 모든 것을 처리하고, 성공/실패 여부만 반환합니다.
+        mission_success = self.actions.fire_suppression_mission()
 
-        # 4) 접근
-        if not self.actions.action_approach_fire():  # <- bool로
-            self.node.get_logger().warn("[Action1] 화재 접근 실패 -> 도킹(또는 재탐색)")
+        if mission_success:
+            self.node.get_logger().info("[Action1] 화재 진압 성공! 미션 완료.")
+            self.actions.trigger_beep_ok()
+            
+            #성공 후 복귀
+            self.actions.go_predock()
+            self.actions.action_dock()
+            return True
+        else:
+            self.node.get_logger().error("[Action1] 화재 진압 실패 (타임아웃 또는 오류)")
             self.actions.trigger_beep_err()
-            self.actions.action_dock()
             return False
-
-        self.node.get_logger().info("[Action1] success")
-        self.actions.trigger_beep_ok()
-        return True
-
 
     def action_2(self):
         pass

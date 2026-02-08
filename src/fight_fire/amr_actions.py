@@ -417,123 +417,143 @@ class RobotActionLib:
         self.node.get_logger().info("✅ Mission Complete.")
         self.state = State.IDLE
 
-
+# =========================================================
+    # [통합] 화재 탐색 -> 정밀 접근 -> 진압/지원요청 (All-in-One)
     # =========================================================
-    # [NEW] 회전하며 화재 탐색 (발견 시 즉시 중단)
-    # =========================================================
-    def spin_and_search_fire(self, timeout=15.0):
+    def fire_suppression_mission(self):
         """
-        제자리에서 회전하며 화재('fire')를 찾습니다.
-        화재가 발견되면(self.target_fire is not None) 즉시 회전을 멈추고 True를 반환합니다.
-        못 찾고 timeout이 지나면 False를 반환합니다.
+        1. Search: 회전하며 불 찾기
+        2. Approach: 중앙 정렬 및 1.0m 접근 (PID 제어)
+        3. Suppression: 5초간 불 안 보이면 성공, 30초 경과 시 지원 요청
         """
-        self.node.get_logger().info("🔄 [Action] 회전하며 화재 탐색 시작...")
-        
-        start_time = time.time()
-        
-        # 1. 회전 명령 (cmd_vel)
-        twist = Twist()
-        twist.angular.z = 0.5  # 회전 속도 (너무 빠르면 감지 못함)
-        
-        while time.time() - start_time < timeout:
-            # 화재 감지 확인
-            if self.target_fire is not None:
-                self.node.get_logger().info(f"🔥 [Action] 화재 발견! 회전 중단. (거리: {self.target_fire['dist']}m)")
-                self.stop_robot() # 즉시 정지
-                return True
+        self.node.get_logger().info("🚀 [Mission] 화재 진압 통합 미션 시작")
+
+        # -----------------------------------------------------
+        # Phase 1: Search (회전 탐색)
+        # -----------------------------------------------------
+        # 만약 이미 불이 보이면 탐색 생략
+        if self.target_fire is None:
+            self.node.get_logger().info("🔄 [Step 1] 화재 탐색 중 (회전)...")
+            start_search = time.time()
+            twist = Twist()
+            twist.angular.z = 0.5
             
-            # 계속 회전
-            self.cmd_vel_pub.publish(twist)
-            time.sleep(0.1)
+            found = False
+            while time.time() - start_search < 15.0: # 15초 제한
+                if self.target_fire is not None:
+                    self.stop_robot()
+                    found = True
+                    self.node.get_logger().info(f"🔥 화재 발견! (거리: {self.target_fire['dist']}m)")
+                    break
+                self.cmd_vel_pub.publish(twist)
+                time.sleep(0.1)
             
-        self.stop_robot()
-        self.node.get_logger().warn("⚠️ [Action] 탐색 실패 (시간 초과)")
-        return False
+            if not found:
+                self.stop_robot()
+                self.node.get_logger().warn("❌ 탐색 실패: 화재를 찾지 못했습니다.")
+                return False # 미션 실패
 
-    def action_approach_fire(self):
-        """
-        1. 화재 감지 대기
-        2. 화면 중앙 맞추기 (회전) & 1.0m까지 접근 (전진)
-        3. 도착 후 정지 및 30초 카운트다운
-        """
-        self.node.get_logger().info("🔥 [Action] 화재 접근 모드 시작. 화재를 찾습니다...")
+        # -----------------------------------------------------
+        # Phase 2: Approach (정밀 접근 - PID 제어)
+        # -----------------------------------------------------
+        self.node.get_logger().info("🏃 [Step 2] 화재 지점으로 정밀 접근 (1.0m 목표)")
+        
+        # 제어 파라미터
+        target_dist = 1.0       # 목표 거리 (m)
+        dist_tolerance = 0.05   # 거리 오차 허용 범위 (m)
+        center_tolerance = 20   # 픽셀 오차 허용 범위
+        img_center_x = self.img_width / 2
 
-
-        #  접근 제어 루프 (PID 제어와 유사)
-        target_dist = 1.0  # 목표 거리 (미터)
-        tolerance = 0.05   # 거리 허용 오차 (±5cm)
-        center_tolerance = 20 # 픽셀 허용 오차
-
+        # 접근 타임아웃 (무한 루프 방지)
+        start_approach = time.time()
+        
         while rclpy.ok():
-            # 화재를 놓쳤을 경우 정지
+            # 타임아웃 체크 (60초 동안 못 가면 실패)
+            if time.time() - start_approach > 60.0:
+                self.node.get_logger().error("❌ 접근 시간 초과!")
+                return False
+
+            # 도중에 불을 놓치면? -> 잠시 정지하고 대기 (다시 보일 수도 있음)
             if self.target_fire is None:
                 self.manual_forward(0.0)
+                time.sleep(0.1)
                 continue
 
-            # 현재 데이터 가져오기
+            # 데이터 추출
             cx = self.target_fire['cx']
             dist = self.target_fire['dist']
 
-            # --- (1) 회전 제어 (화면 중앙 맞추기) ---
-            center_x = self.img_width / 2
-            error_x = center_x - cx
-            
-            # 오차가 크면 회전 (P제어)
-            angular_z = 0.002 * error_x 
-            angular_z = max(min(angular_z, 0.4), -0.4) # 속도 제한
+            # --- 회전 제어 (화면 중앙 맞추기) ---
+            error_x = img_center_x - cx
+            angular_z = 0.002 * error_x
+            # 속도 제한 (-0.4 ~ 0.4)
+            angular_z = max(min(angular_z, 0.4), -0.4)
 
-            # 중앙에 거의 맞으면 회전 멈춤
             if abs(error_x) < center_tolerance:
                 angular_z = 0.0
 
-            # --- (2) 거리 제어 (1m 맞추기) ---
+            # --- 거리 제어 (1.0m 맞추기) ---
             linear_x = 0.0
-            
-            # 로봇이 대략 불을 바라보고 있을 때만 전진 (엉뚱한 곳으로 가는 것 방지)
-            if abs(error_x) < 100:
-                if dist > target_dist + tolerance:
-                    linear_x = 0.15  # 천천히 전진
-                elif dist < target_dist - tolerance:
-                    linear_x = -0.05 # 너무 가까우면 살짝 후진
-                else:
-                    # 목표 거리에 도달함!
-                    linear_x = 0.0
-                    angular_z = 0.0
-                    
-                    # 완전 정지 명령
-                    twist = Twist()
-                    self.cmd_vel_pub.publish(twist)
-                    self.node.get_logger().info(f"✅ [Action] 목표 지점 도착! (거리: {dist}m)")
-                    break
+            dist_error = dist - target_dist
 
-            # 속도 명령 발행
+            # 중앙이 어느 정도 맞았을 때만 전진 (안 그러면 엉뚱한 데로 감)
+            if abs(error_x) < 100:
+                if dist > target_dist + dist_tolerance:
+                    linear_x = 0.15  # 전진
+                elif dist < target_dist - dist_tolerance:
+                    linear_x = -0.05 # 너무 가까우면 후진
+                else:
+                    # 거리도 맞고, 각도도 맞으면 도착!
+                    self.stop_robot()
+                    self.node.get_logger().info(f"✅ [Step 2] 도착 완료! (거리: {dist}m)")
+                    break # Phase 3로 이동
+
+            # 명령 발행
             twist = Twist()
             twist.linear.x = float(linear_x)
             twist.angular.z = float(angular_z)
             self.cmd_vel_pub.publish(twist)
-            
             time.sleep(0.1)
 
-        #  30초 대기 (진압 시뮬레이션)
-        self.node.get_logger().info("🧯 [Timer] 화재 진압 작업을 시작합니다. (30초 대기)")
+        # -----------------------------------------------------
+        # Phase 3: Suppression (진압 확인 및 지원 요청)
+        # -----------------------------------------------------
+        self.node.get_logger().info("🧯 [Step 3] 진압 작업 및 감시 시작...")
         
-        start_time = time.time()
-        while time.time() - start_time < 30.0:
-            elapsed = int(time.time() - start_time)
-            remaining = 30 - elapsed
-            
-            # 5초마다 로그 출력
-            if elapsed > 0 and elapsed % 5 == 0:
-                 self.node.get_logger().info(f"⏳ [Timer] 진압 중... {remaining}초 남음")
-            
-            time.sleep(1.0) # 1초씩 대기
+        suppression_start = time.time()
+        last_seen_time = time.time()
+        help_sent = False
 
-        self.node.get_logger().info("🎉 [Timer] 30초 경과! 화재 진압 완료.")
-        self.trigger_beep() # 완료 비프음
+        while rclpy.ok():
+            now = time.time()
 
-    # =========================================================
-    # Utility
-    # =========================================================
+            # 1. 불이 보이는지 체크
+            if self.target_fire is not None:
+                last_seen_time = now # 불이 보이면 시간 갱신
+            
+            # 2. 소화 완료 판단 (5초 동안 불이 안 보임)
+            if now - last_seen_time > 5.0:
+                self.node.get_logger().info("✨ [Success] 화재 소화 완료! (5초간 미감지)")
+                self.trigger_beep()
+                return True
+
+            # 3. 지원 요청 (30초 지났는데 아직 불이 안 꺼짐)
+            # (불이 마지막으로 보인 시간이 최근 1초 이내여야 함 = 아직 불타는 중)
+            if (now - suppression_start > 30.0) and (not help_sent) and (now - last_seen_time < 1.0):
+                self.node.get_logger().warn("🚨 [Help] 30초 경과! 진압 실패. 지원 요청 전송.")
+                
+                # 현재 내 위치 보내기
+                self.send_help_point(self.robot_x, self.robot_y)
+                self.trigger_beep()
+                help_sent = True
+                
+                # 지원 요청 후에는 복귀를 할지, 계속 대기할지 정책 결정
+                # 여기서는 일단 미션 실패로 간주하고 복귀 절차 실행
+                self.node.get_logger().info("⚠️ 지원 요청 후 복귀 절차로 넘어갑니다.")
+                return False
+
+            time.sleep(0.1)
+  
     ##############################################################################
     # 프리토킹 + 도킹 실패시 예외처리
     #################################################################################
@@ -644,102 +664,6 @@ class RobotActionLib:
         ]
 
         self.audio_pub.publish(msg)
-
-    def fire_search_and_chase(
-        self,
-        is_target_locked_fn,
-        control_to_fire_fn,
-        spin_duration: float = 10.0,
-        chase_timeout: float = 60.0,
-        rotate_speed: float = 0.3,
-    ) -> bool:
-        """
-        정찰 회전 후 화재 추적 루프.
-        - is_target_locked_fn: () -> bool  (외부 상태 판단 함수)
-        - control_to_fire_fn: () -> bool   (접근 제어 1 step, 도착하면 True)
-        """
-        self.node.get_logger().info("[Fire] 정찰 회전")
-        try:
-            # 1) Spin
-            self.perform_spin(duration=spin_duration)
-            self.wait_for_nav(timeout=spin_duration + 20.0, step_name="spin")
-
-            # 2) Chase loop
-            self.node.get_logger().info("[Fire] 화재 추적 시작")
-            start = time.time()
-
-            fire_engage_start = None
-            handover_sent = False
-
-            while True:
-                now = time.time()
-
-                if now - start > chase_timeout:
-                    raise TimeoutError("[Fire] 화재 접근 타임아웃")
-
-                locked = is_target_locked_fn()
-
-                if locked:
-                    if fire_engage_start is None:
-                        fire_engage_start = now
-                        self.node.get_logger().info("[Fire] engage start")
-
-                    if (not handover_sent) and (now - fire_engage_start >= 30.0):
-                        hx, hy = 3.18, -3.70
-                        self.send_help_point(hx, hy)
-                        self.trigger_beep()
-                        handover_sent = True
-
-                    if control_to_fire_fn():
-                        self.node.get_logger().info("[Fire] 화재 지점 도착!")
-                        return True
-
-                else:
-                    self.manual_rotate(rotate_speed)
-                    fire_engage_start = None
-                    handover_sent = False
-
-                time.sleep(0.1)
-
-        except Exception as e:
-            # 여기서 “추후 동작 실패”를 전부 잡음 (timeout 포함)
-            self.node.get_logger().error(f"[Fire] 실패로 인해 복귀/도킹 수행: {e}")
-
-            # (선택) 진행 중인 네비/회전 stop/cancel이 있다면 먼저 호출
-            try:
-                if hasattr(self, "navigator") and hasattr(self.navigator, "cancelTask"):
-                    self.navigator.cancelTask()
-            except Exception as ce:
-                self.node.get_logger().warn(f"[Fire] cancelTask 실패: {ce}")
-
-            # go_home + dock
-            try:
-                self.go_predock()
-                self.wait_for_nav(timeout=30.0, step_name="predock") # 30초동안 프리도킹 위치로 이동 
-            except Exception as he:
-                self.node.get_logger().warn(f"[Fire] go_predock 실패: {he}")
-                if hasattr(self, "navigator") and hasattr(self.navigator, "cancelTask"):
-                    self.navigator.cancelTask()
-            #도킹시도 
-            try:
-                if not self.navigator.getDockedStatus():
-                    self.navigator.dock()
-
-                # 도킹 완료 폴링(예: 30초)
-                t0 = time.time()
-                dock_timeout = 30.0
-                while time.time() - t0 < dock_timeout:
-                    if self.navigator.getDockedStatus():
-                        self.node.get_logger().info("[Fire] 도킹 완료")
-                        break
-                    time.sleep(0.2)
-                else:
-                    self.stop_and_alarm_forever(reason="[Fire] 도킹 타임아웃(미도킹 상태)")
-
-            except Exception as de:
-                self.stop_and_alarm_forever(reason=f"[Fire] dock 실패: {de}")
-
-            return False
         
     def check_follower(self):
         """뒤돌아보기 (Visual check)"""
@@ -766,63 +690,6 @@ class RobotActionLib:
 
         return is_following
 
-
-        # self.node.get_logger().info("[Fire] 정찰 회전")
-        # self.perform_spin(duration=spin_duration)
-        # self.wait_for_nav(timeout=spin_duration + 20.0, step_name="spin")
-
-        # self.node.get_logger().info("[Fire] 화재 추적 시작")
-        # start = time.time()
-
-        # fire_engage_start = None   # 화재 접근 시작 시각
-        # handover_sent = False      # 교대 요청 1회만 보내기
-
-        # while True:
-        #     now = time.time()
-
-        #     if now - start > chase_timeout:
-        #         self.node.get_logger().error("[Fire] 화재 접근 타임아웃!")
-        #         return False
-
-        #     locked = is_target_locked_fn()
-
-        #     # ============================
-        #     # 🔥 화재 진압 중 상태
-        #     # ============================
-        #     if locked:
-
-        #         # 화재 처음 잡은 순간 시간 기록
-        #         if fire_engage_start is None:
-        #             fire_engage_start = now
-        #             self.node.get_logger().info("[Fire] engage start")
-
-        #         # 🔴 여기에 넣는거다
-        #         if (not handover_sent) and (now - fire_engage_start >= 30.0):
-
-        #             # 교대 로봇이 와야 하는 위치
-        #             hx, hy = 3.18, -3.70   # 또는 현재 로봇 위치
-
-        #             self.send_help_point(hx, hy)
-        #             self.trigger_beep()
-
-        #             handover_sent = True
-
-        #         # 실제 접근 제어
-        #         if control_to_fire_fn():
-        #             self.node.get_logger().info("[Fire] 화재 지점 도착!")
-        #             return True
-
-        #     # ============================
-        #     # 🔄 타겟 못잡은 상태 → 탐색
-        #     # ============================
-        #     else:
-        #         self.manual_rotate(rotate_speed)
-
-        #         # 타겟 놓치면 진압 타이머 리셋
-        #         fire_engage_start = None
-        #         handover_sent = False
-
-        #     time.sleep(0.1)
 
     def send_help_point(self, x:float, y:float):
 
