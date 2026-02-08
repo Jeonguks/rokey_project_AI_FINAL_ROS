@@ -283,7 +283,7 @@ class FullSequenceTest(Node):
 
                 try:
                     # 1) 목적지 이동/도킹해제 루트
-                    self.actions.action_2()
+                    self.actions.action_3()
 
                 except Exception as e:
                     self.get_logger().error(f"[Mission] failed: {e}")
@@ -293,6 +293,23 @@ class FullSequenceTest(Node):
                     self.actions.stop_robot()
                     self.is_mission_running = False
                     self.get_logger().info("[Mission] done")
+            elif code == "afbpcn":
+                self.get_logger().warn("[Mission] code='afbpcn' (3번시나리오 실행)")
+                self._last_handled_code = code
+                self._last_handled_time = now
+
+                self.is_mission_running = True
+                try:
+                    self.actions.action_6()
+
+                except Exception as e:
+                    self.get_logger().error(f"[Mission] failed: {e}")
+                    self.actions.stop_robot()
+                    
+                # finally:
+                #     self.actions.stop_robot()
+                #     self.is_mission_running = False
+                #     self.get_logger().info("[Mission] done")
 
             else:
                 self.get_logger().info(f"[Mission] unknown code='{code}' -> ignore")

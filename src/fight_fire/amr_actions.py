@@ -238,8 +238,7 @@ class RobotActionLib:
 
 
     def action_3(self):
-            # 이 코드는 불 난곳 가서 끄는 코드임. 불은 방 한곳에서만 남
-    # 불끄러 갈떄 사람 만나면 다른로봇에 좌표 쏴주는거 필요 
+        #a는 불끄러 가고 b는 사람 구출 하고 있을때 30초 지나면 도와주러 오기 
 
         '''
         나머지 한대는 불 끄러 간 상태 이 로봇은 
@@ -260,30 +259,62 @@ class RobotActionLib:
 
         '''
 
-        # 2. 탐색
-        self.node.get_logger().info("Starting Mission.")
-        target_found = self.go_to_A()
-        
-        if target_found:
-            self.state = State.SEARCHING
-            rotate_search = self.rotate_degree(-120.0)
-        else:
-            self.node.get_logger().info(f"A방 도착 실패{target_found}")
 
-        if rotate_search:
-            self.state = State.MOVINGAIN
-            self.go_to_A_in()
-        else:
-            self.node.get_logger().info(f"A방 안쪽 도착 실패")
 
-        if self.state == State.MOVINGAIN:
-            self.rotate_degree(-120.0)
-            self.state = State.FIND
-        else:
-            self.node.get_logger().info(f"탐색 실패")
+        # 2) Namespace별 경로
+        if self.namespace == "/robot2":
+            # robot2 -> 장소 A 루트 (a1->a2->a3)
+            self.node.get_logger().info("Starting Mission.")
+            self.move_to_wp_a1(); self.wait_for_nav(step_name="wp_a1")
+            self.move_to_wp_a2(); self.wait_for_nav(step_name="wp_a2")
+ 
+            found = self.spin_and_search_fire(timeout=15.0)  
+            if found:
+                self.moving_pub.publish(String(data="화재 접근 중"))
+                # 찾은 상태에서 그대로 접근 시작
+                self.action_approach_fire()
+                # 30초 경과후 도움요청
+                self.send_help_point()()
+                # 도움요청후 프리도킹 위치로 이동
+                self.go_predock()
+                # 도킹
+                self.do_dock()
 
-        if self.state == State.FIND:
-            self.guide_sequence()
+            else:
+                self.node.get_logger().warn("❌ 화재를 찾지 못해 다음방으로 감.")
+                self.move_to_wp_a3(); self.wait_for_nav(step_name="wp_a3")
+                found = self.spin_and_search_fire(timeout=15.0)  
+                if found:
+                    self.moving_pub.publish(String(data="화재 접근 중"))
+                    # 찾은 상태에서 그대로 접근 시작
+                    self.action_approach_fire()
+                    # 30초 경과후 도움요청
+                    self.send_help_point()()   
+                    # 도움요청후 프리도킹 위치로 이동
+                    self.go_predock()
+                    # 도킹
+                    self.do_dock()  
+
+        elif self.namespace == "/robot6":
+            # robot6 -> 장소 B 루트 (b1->b2)
+            self.move_to_wp_b1(); self.wait_for_nav(step_name="wp_b1")
+            if self._handle_help_interrupt_robot6(step_name="after_wp_b1"):
+                return
+            self.move_to_wp_b2(); self.wait_for_nav(step_name="wp_b2")
+            if self._handle_help_interrupt_robot6(step_name="after_wp_b2"):
+                return
+            self.node.get_logger().info("[Action3] robot6: help 대기 모드 진입")
+
+            while rclpy.ok():
+                # ✅ 도움 들어오면 즉시 이동
+                if self._handle_help_interrupt_robot6(step_name="wait_loop"):
+                    return
+
+                # 대기 중에도 안전하게 정지 유지
+                self.stop_robot()
+                time.sleep(0.2)
+                
+
 
 #####################################################
         
@@ -346,6 +377,17 @@ class RobotActionLib:
             self.node.get_logger().warn("❌ 화재를 찾지 못해 접근 단계를 건너뜁니다.")    
 
 
+    def action_7(self):
+        if self.namespace == "/robot2":
+            # robot2 -> 장소 A 루트 (a1->a2->a3)
+            self.node.get_logger().info("Starting Mission.")
+
+            
+
+        elif self.namespace == "/robot6":
+            # robot6 -> 장소 B 루트 (b1->b2)
+            self.move_to_wp_b1(); self.wait_for_nav(step_name="wp_b1")
+            self.move_to_wp_b2(); self.wait_for_nav(step_name="wp_b2")       
 
     # =========================================================
     # Navigation Actions
@@ -926,30 +968,66 @@ class RobotActionLib:
         self._try_handle_help()
 
     def _try_handle_help(self):
+        # help가 pending 아니면 패스
         if not self.pending_help:
             return
-
         if self.last_point is None:
             return
-
         if self._help_handled:
             return
 
+        # ✅ robot6는 action_3에서만 처리 (콜백에서 startToPose 금지)
+        if self.namespace == "/robot6":
+            self.node.get_logger().warn(
+                f"[Help] (robot6) 도움요청 예약됨 -> ({self.last_point[0]:.3f},{self.last_point[1]:.3f})"
+            )
+            return
+
+        # (robot2는 기존처럼 즉시 처리하고 싶으면 여기서 처리)
         help_x, help_y = self.last_point
+        self.node.get_logger().warn(f"[Help] handling -> go to ({help_x:.3f}, {help_y:.3f})")
 
-        self.node.get_logger().warn(
-            f"[Help] handling -> go to ({help_x:.3f},{help_y:.3f})"
-        )
-
-        goal_pose = self.navigator.getPoseStamped(
-            [help_x, help_y],
-            TurtleBot4Directions.NORTH   # TODO: 방향 정책 필요
-        )
-
+        goal_pose = self.navigator.getPoseStamped([help_x, help_y], TurtleBot4Directions.NORTH)
         self.navigator.startToPose(goal_pose)
 
         self.pending_help = False
         self._help_handled = True
+
+    def _help_interrupt_requested_robot6(self) -> bool:
+        return (self.namespace == "/robot6") and bool(self.pending_help) and (self.last_point is not None) and (not self._help_handled)
+
+    def _handle_help_interrupt_robot6(self, step_name: str = "help_interrupt") -> bool:
+        """
+        robot6: action_3 수행 중 도움 요청 오면 즉시 현재 행동 중단하고 좌표로 이동
+        """
+        if not self._help_interrupt_requested_robot6():
+            return False
+
+        hx, hy = self.last_point
+        self.node.get_logger().warn(f"[robot6:{step_name}] 도움요청 -> ({hx:.3f}, {hy:.3f})로 즉시 이동")
+
+        # 1) cmd_vel 루프가 있으면 멈춤
+        self.stop_robot()
+
+        # 2) Nav2 태스크 취소(진행중이면)
+        try:
+            self.navigator.cancelTask()
+        except Exception:
+            pass
+
+        # 3) help goal 실행
+        goal_pose = self.navigator.getPoseStamped([hx, hy], TurtleBot4Directions.NORTH)
+        self.navigator.startToPose(goal_pose)
+
+        ok = self.wait_for_nav(timeout=120.0, step_name="robot6_help_goal")
+
+        # 4) 플래그 정리
+        self.pending_help = False
+        self._help_handled = True
+        self.latest_help = False
+
+        self.node.get_logger().warn(f"[robot6:{step_name}] help_goal 도착 ok={ok}")
+        return ok
 
     def perception_callback(self, msg):
         #JSON 데이터를 파싱 parse
