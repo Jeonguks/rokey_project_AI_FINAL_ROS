@@ -76,6 +76,7 @@ class RobotActionLib:
         self.pending_help = False
         self.last_point = None
         self._help_handled = False
+        self.target_stand = None
 
         self._cancel_sent = False
         self._cancel_sent_ts = 0.0
@@ -744,6 +745,179 @@ class RobotActionLib:
                 
         except Exception as e:
             self.node.get_logger().error(f"JSON 파싱 에러: {e}")
+
+    def perception_callback(self, msg):
+        try:
+            detections = json.loads(msg.data)
+            found_stand = False
+            
+            for obj in detections:
+                # [필수 추가] 사람(stand) 감지 로직
+                if obj['class'] == 'stand':
+                    self.target_stand = obj  # 여기서 obj 안에 dist 정보가 다 들어감
+                    found_stand = True
+                    break # 사람 하나만 찾으면 됨 (여러 명일 경우 첫 번째 사람)
+            
+            # 사람이 안 보이면 None으로 초기화 (매우 중요! 안 그러면 계속 보인다고 착각함)
+            if not found_stand:
+                self.target_stand = None
+                
+        except Exception as e:
+            self.node.get_logger().error(f"JSON 파싱 에러: {e}")
+
+    # =========================================================
+    # [NEW] 대피 안내 시퀀스 (에스코트)
+    # =========================================================
+    def guide_human_sequence(self):
+        """
+        사람을 인식하면 비프음을 울리고, 5초마다 뒤를 확인하며
+        대피소까지 1.5m 거리를 유지하며 안내합니다.
+        """
+        self.node.get_logger().info("🏃 [Guide] 대피 안내 시퀀스 시작")
+        
+        # 1. 초기 사람 감지 대기
+        if self.target_stand:
+            self.node.get_logger().info("👤 [Guide] 사람(stand) 감지됨! 안내를 시작합니다.")
+            self.trigger_beep()
+        else:
+            self.node.get_logger().warn("⚠️ [Guide] 사람이 아직 안 보이지만 일단 시작합니다.")
+
+        # 대피소 좌표 (테스트용 좌표)
+        goal_x, goal_y = 3.92, -1.09 
+        # 실제 사용 시: goal_x, goal_y = 0.972021, 0.383458
+        
+        target_pose = self.navigator.getPoseStamped([goal_x, goal_y], TurtleBot4Directions.SOUTH_EAST)
+        
+        # 이동 시작
+        self.navigator.startToPose(target_pose)
+        last_check_time = time.time()
+        
+        # --- 이동 루프 (도착할 때까지) ---
+        while not self.navigator.isTaskComplete():
+            
+            # 5초마다 뒤돌아보기 체크
+            if time.time() - last_check_time > 5.0:
+                self.node.get_logger().info("👀 [Check] 5초 경과. 뒤를 확인합니다.")
+                
+                # 1) 가던 길 멈춤
+                self.navigator.cancelTask()
+                self.stop_robot()
+                
+                # 2) 뒤로 돌기 (180도)
+                self.node.get_logger().info("🔄 뒤로 도는 중...")
+                self.manual_rotate_180() 
+                
+                # 3) 거리 확인 및 대기 (1.5m 유지 로직)
+                while rclpy.ok():
+                    # [수정 적용된 부분] dist 유효성 검사 로직 -----------------------
+                    if self.target_stand is None:
+                        self.node.get_logger().warn("❓ 사람이 안 보입니다. 기다리는 중...")
+                        time.sleep(0.5)
+                        continue
+
+                    # 안전하게 가져오기 (없으면 0.0)
+                    dist = self.target_stand.get('dist', 0.0) 
+
+                    # 거리가 0.0이면(측정 불가) 너무 가깝다고 판단하거나 무시
+                    if dist == 0.0:
+                        self.node.get_logger().warn("⚠️ 거리 측정 불가 (0.0m). 너무 가깝거나 멉니다.")
+                        # 안전을 위해 잠시 대기
+                        time.sleep(0.5)
+                        continue
+
+                    self.node.get_logger().info(f"📏 사람과의 거리: {dist:.2f}m (기준 1.5m)")
+                    # -----------------------------------------------------------
+                    
+                    if dist > 1.5:
+                        # 1.5m보다 멀면 가만히 서서 기다림 (Loop 계속)
+                        pass 
+                    else:
+                        # 1.5m 이내로 들어옴 -> 다시 이동 준비
+                        self.node.get_logger().info("✅ 거리가 좁혀졌습니다. 이동을 재개합니다.")
+                        self.trigger_beep() # 출발 신호
+                        break
+                    
+                    time.sleep(0.5)
+                
+                # 4) 다시 앞으로 돌기 (180도)
+                self.node.get_logger().info("🔄 다시 앞으로 도는 중...")
+                self.manual_rotate_180()
+                
+                # 5) 목표지점 재설정 및 이동 재개
+                self.navigator.startToPose(target_pose)
+                last_check_time = time.time() # 타이머 리셋
+            
+            time.sleep(0.1)
+
+        # --- 도착 후 로직 ---
+        result = self.navigator.getResult()
+        if result == TaskResult.SUCCEEDED:
+            self.node.get_logger().info("🏁 [Guide] 대피소 도착! 마지막 확인을 수행합니다.")
+            self.final_check_sequence()
+        else:
+            self.node.get_logger().error("❌ [Guide] 대피소 이동 실패!")
+
+    # ---------------------------------------------------------
+    # 도착 후 마지막 확인 (주시하다가 사라지면 완료)
+    # ---------------------------------------------------------
+    def final_check_sequence(self):
+        # 1. 뒤로 돌기
+        self.manual_rotate_180()
+        
+        self.node.get_logger().info("👁️ [Final] 사람을 주시합니다. (사라지면 완료)")
+        
+        disappear_start_time = None
+        center_tolerance = 40 # 중앙 픽셀 오차
+        img_center_x = 320    # 640/2
+        
+        while rclpy.ok():
+            # 사람이 보임 -> 중앙 맞추기 (Visual Servoing)
+            if self.target_stand is not None:
+                disappear_start_time = None # 타이머 리셋
+                
+                cx = self.target_stand['cx']
+                error_x = img_center_x - cx
+                
+                # P제어 회전
+                angular_z = 0.003 * error_x
+                angular_z = max(min(angular_z, 0.5), -0.5) # 속도 제한
+                
+                if abs(error_x) < center_tolerance:
+                    angular_z = 0.0
+                
+                twist = Twist()
+                twist.angular.z = float(angular_z)
+                self.cmd_vel_pub.publish(twist)
+                
+            # 사람이 안 보임 -> 카운트다운
+            else:
+                self.stop_robot()
+                if disappear_start_time is None:
+                    disappear_start_time = time.time()
+                
+                elapsed = time.time() - disappear_start_time
+                if elapsed > 5.0:
+                    self.node.get_logger().info("🎉 [Complete] 사람이 사라지고 5초 경과. 대피 완료!")
+                    self.trigger_beep()
+                    break
+                else:
+                    self.node.get_logger().info(f"⏳ 사람 미감지... {elapsed:.1f}s / 5.0s")
+            
+            time.sleep(0.1)
+
+    # --- Helper: 180도 회전 (수동 제어) ---
+    def manual_rotate_180(self):
+        # 시간 기반 수동 회전 (약 3.14rad)
+        twist = Twist()
+        twist.angular.z = 0.5 # rad/s
+        duration = 3.14 / 0.5 # 약 6.28초
+        
+        start = time.time()
+        while time.time() - start < duration:
+            self.cmd_vel_pub.publish(twist)
+            time.sleep(0.05)
+        
+        self.stop_robot()
 
     def action_undock(self):
         try:
