@@ -203,8 +203,28 @@ class DoActionNode(Node):
                 return False
             
         elif self.ns == "/robot6":
-            self.node.get_logger().info("[Action1] B 인명 구조 시퀀스 시작")
-            mission_success = self.actions.fire_suppression_mission()
+            self.node.get_logger().info("[Action2] B 인명 구조(에스코트) 시퀀스 시작")
+    
+            try:
+                self.actions.guide_human_sequence()
+                
+                # 안내가 정상적으로 끝나면 여기로 옴
+                self.node.get_logger().info("[Action2] 인명 구조 완료! 복귀합니다.")
+                self.actions.trigger_beep_ok()
+                
+                # 복귀 및 도킹
+                self.actions.go_predock()
+                self.actions.action_dock()
+                return True
+
+            except Exception as e:
+                # 도중에 에러나면 실패 처리
+                self.node.get_logger().error(f"[Action2] 구조 실패: {e}")
+                self.actions.trigger_beep_err()
+                return False
+            
+
+            
 
 
 
