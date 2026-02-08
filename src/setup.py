@@ -30,7 +30,6 @@ setup(
     entry_points={
         'console_scripts': [
             'task_controller = fight_fire.task_controller_node:main',
-            'action_controller = fight_fire.action_controller_node:main'
             'perception_node = fight_fire.perception_node:main',
         ],
     },
