@@ -29,12 +29,9 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            'mission_commander = fight_fire.mission_commander:main',
+            'task_controller = fight_fire.task_controller_node:main',
+            'action_controller = fight_fire.action_controller_node:main'
             'perception_node = fight_fire.perception_node:main',
-            'evacuation_node = fight_fire.evacuation_node:main',
-            'test = fight_fire.test:main',
-            'amr_actions = fight_fire.amr_actions:main',
-            # 'wall_follower = fight_fire.wall_follower:main',
         ],
     },
 )
