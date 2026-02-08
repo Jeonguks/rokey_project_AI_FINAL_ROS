@@ -6,9 +6,9 @@ from turtlebot4_navigation.turtlebot4_navigator import TurtleBot4Navigator
 from fight_fire.amr_actions import RobotActionLib
 
 
-class DoActionNode(Node):
+class ActionControllerNode(Node):
     def __init__(self):
-        super().__init__('do_action_node')
+        super().__init__('action_controller_node')
 
         # ActionLib 연결
         self.actions = RobotActionLib(self)
@@ -273,7 +273,7 @@ class DoActionNode(Node):
 
 def main(args=None):
     rclpy.init(args=args)
-    node = DoActionNode()
+    node = ActionControllerNode()
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:

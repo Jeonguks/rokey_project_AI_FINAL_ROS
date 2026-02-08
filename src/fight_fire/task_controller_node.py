@@ -6,11 +6,12 @@ import threading
 import time
 import json
 from fight_fire.amr_actions import RobotActionLib
+from fight_fire.action_controller_node import ActionControllerNode
 from turtlebot4_navigation.turtlebot4_navigator import TurtleBot4Directions, TurtleBot4Navigator
 
-class FullSequenceTest(Node):
+class TaskControllerNode(Node):
     def __init__(self):
-        super().__init__('full_sequence_test_node')
+        super().__init__('task_controller_node')
 
         self.namespace = self.get_namespace() 
         self.other_namespace = "/robot6"
@@ -21,8 +22,7 @@ class FullSequenceTest(Node):
             self.other_namespace = "/robot2" 
 
 
-
-        # ActionLib 연결
+        self.controller = ActionControllerNode(self)
         self.actions = RobotActionLib(self)
         
         # 1. 트리거 구독
@@ -81,14 +81,15 @@ class FullSequenceTest(Node):
         self._help_goal = None  # (x,y)
 
     # ---------------------------------------------------------
-    # (NEW) detection list -> f/p/n 매핑
+    # (NEW) detection list -> f/s/d/n 매핑
     # ---------------------------------------------------------
     def map_detection_to_code(self, detection_list):
         """
         detection_list 예: ["stand", "fire"]
         우선순위:
           - fire 있으면 'f'
-          - stand/down 있으면 'p'
+          - stand 있으면 's'
+          - down 있으면 'd'
           - 그 외/비었으면 'n'
         """
         if not detection_list:
@@ -97,8 +98,11 @@ class FullSequenceTest(Node):
         s = set(detection_list)
         if "fire" in s:
             return "f"
-        if ("stand" in s) or ("down" in s):
-            return "p"
+        if "stand" in s:
+            return "s"
+        if "down" in s:
+            return "d"
+
         return "n"
 
     def build_code_from_detection(self, data: dict) -> str:
@@ -136,12 +140,6 @@ class FullSequenceTest(Node):
 
         self.get_logger().info(f"[Trigger RX] json -> code='{code}' (raw={raw})")
         
-        # code = (msg.data or "").strip()
-        # with self._code_lock:
-        #     self._latest_code = code
-        #     self._latest_code_time = time.time()
-
-        # self.get_logger().info(f"[Trigger RX] code='{code}'")
 
     def perception_callback(self, msg):
         """Perception Node가 보내주는 JSON 데이터를 해석"""
@@ -185,7 +183,7 @@ class FullSequenceTest(Node):
         
         # 1. 도착 판정 (오차 15cm 이내)
         if abs(dist_err) < 0.15:
-            self.actions.cmd_vel_pub.publish(Twist()) # 정지
+            self.controller.cmd_vel_pub.publish(Twist()) # 정지
             return True # 도착 완료!
 
         # 2. 주행 제어 (P제어)
@@ -196,18 +194,18 @@ class FullSequenceTest(Node):
         cmd.linear.x = max(min(cmd.linear.x, 0.2), -0.2)
         cmd.angular.z = max(min(cmd.angular.z, 0.5), -0.5)
 
-        self.actions.cmd_vel_pub.publish(cmd)
+        self.controller.cmd_vel_pub.publish(cmd)
         return False
 
     def wait_for_nav(self, timeout=100.0):
         start_time = time.time()
-        while not self.actions.is_nav_complete():
+        while not self.controller.is_nav_complete():
             if time.time() - start_time > timeout:
                 self.get_logger().warn(f"⏰ 타임아웃! ({timeout}초). 강제로 다음 단계 진행.")
                 # Undock은 물리적으로 빠져나왔으면 성공으로 간주하고 True 반환
                 return True 
             time.sleep(0.5)
-        return self.actions.is_nav_succeeded()
+        return self.controller.is_nav_succeeded()
     # ---------------------------------------------------------
     # (E) 미션 루프:
     #     여기서 코드 조건에 따라 action_1 실행
@@ -254,16 +252,7 @@ class FullSequenceTest(Node):
                 self.is_mission_running = True
                 try:
                     # 1) 목적지 이동/도킹해제 루트
-                    self.actions.action_1()
-
-                    # 2) 정찰회전 + 화재추적 (ActionLib로 위임)
-                    self.actions.fire_search_and_chase(
-                        is_target_locked_fn=lambda: self.target_locked,
-                        control_to_fire_fn=self.control_robot_to_fire,
-                        spin_duration=10.0,
-                        chase_timeout=60.0,
-                        rotate_speed=0.3,
-                    )
+                    self.controller.action_1()
 
                 except Exception as e:
                     self.get_logger().error(f"[Mission] failed: {e}")
@@ -274,42 +263,40 @@ class FullSequenceTest(Node):
                     self.is_mission_running = False
                     self.get_logger().info("[Mission] done")
             
-            elif code == "apbfcn":
-                self.get_logger().warn("[Mission] code='afbccf' (사람구출하자)")
+            elif code == "asbfcn":
+                self.get_logger().warn("[Mission] code='asbfcn' ")
                 self._last_handled_code = code
                 self._last_handled_time = now
 
                 self.is_mission_running = True
 
                 try:
-                    # 1) 목적지 이동/도킹해제 루트
-                    self.actions.action_3()
+                    self.controller.action_3()
 
                 except Exception as e:
                     self.get_logger().error(f"[Mission] failed: {e}")
                     self.actions.stop_robot()
                     
                 finally:
-                    self.actions.stop_robot()
                     self.is_mission_running = False
                     self.get_logger().info("[Mission] done")
-            elif code == "afbpcn":
-                self.get_logger().warn("[Mission] code='afbpcn' (3번시나리오 실행)")
+
+            elif code == "afbscn":
+                self.get_logger().warn("[Mission] code='afbscn' ")
                 self._last_handled_code = code
                 self._last_handled_time = now
 
                 self.is_mission_running = True
                 try:
-                    self.actions.action_3()
+                    self.controller.action_2()
 
                 except Exception as e:
                     self.get_logger().error(f"[Mission] failed: {e}")
                     self.actions.stop_robot()
                     
-                # finally:
-                #     self.actions.stop_robot()
-                #     self.is_mission_running = False
-                #     self.get_logger().info("[Mission] done")
+                finally:
+                    self.is_mission_running = False
+                    self.get_logger().info("[Mission] done")
 
             else:
                 self.get_logger().info(f"[Mission] unknown code='{code}' -> ignore")
@@ -375,7 +362,7 @@ class FullSequenceTest(Node):
 
 def main(args=None):
     rclpy.init(args=args)
-    node = FullSequenceTest()
+    node = TaskControllerNode()
     executor = rclpy.executors.MultiThreadedExecutor()
     executor.add_node(node)
     try:
