@@ -3,6 +3,8 @@ import json
 import math
 import time
 
+import requests
+
 import rclpy
 from rclpy.node import Node
 from rclpy.duration import Duration
@@ -374,6 +376,10 @@ class RobotActionLib:
         suppression_start = time.time()
         last_seen_time = time.time()
         help_sent = False
+        try:
+            requests.get("http://192.168.108.200:4000/gpio/high", timeout=1)
+        except requests.exceptions.RequestException:
+            pass
 
         while rclpy.ok():
             now = time.time()
@@ -384,12 +390,20 @@ class RobotActionLib:
             # success if 5s no fire
             if now - last_seen_time > 5.0:
                 self.node.get_logger().info("[Fire] success (5s no fire)")
+                try:
+                    requests.get("http://192.168.108.200:4000/gpio/low", timeout=1)
+                except requests.exceptions.RequestException:
+                    pass
                 self.trigger_beep_ok()
                 return True
 
             # help if 30s and still burning
             if (now - suppression_start > 30.0) and (not help_sent) and (now - last_seen_time < 1.0):
                 self.node.get_logger().warn("[Fire] help request (30s)")
+                try:
+                    requests.get("http://192.168.108.200:4000/gpio/low", timeout=1)
+                except requests.exceptions.RequestException:
+                    pass
                 if self.robot_x is not None and self.robot_y is not None:
                     self.send_help_point(self.robot_x, self.robot_y)
                 self.trigger_beep()
@@ -397,7 +411,10 @@ class RobotActionLib:
                 return False
 
             time.sleep(0.1)
-
+            try:
+                requests.get("http://192.168.108.200:4000/gpio/low", timeout=1)
+            except requests.exceptions.RequestException:
+                pass
         return False
 
     # ---------------------------
