@@ -258,68 +258,64 @@ class RobotActionLib:
         #회전탐색
 
         '''
+         # Undock
+        self.action_undock()
+        if self.nav.getDockedStatus():
+        # undock은 응답이 느릴 수 있으니 timeout 넉넉히
 
-
-
-        # 2) Namespace별 경로
-        if self.namespace == "/robot2":
-            # robot2 -> 장소 A 루트 (a1->a2->a3)
-            self.node.get_logger().info("Starting Mission.")
-            self.move_to_wp_a1(); self.wait_for_nav(step_name="wp_a1")
-            self.move_to_wp_a2(); self.wait_for_nav(step_name="wp_a2")
- 
-            found = self.spin_and_search_fire(timeout=15.0)  
-            if found:
-                self.moving_pub.publish(String(data="화재 접근 중"))
-                # 찾은 상태에서 그대로 접근 시작
-                self.action_approach_fire()
-                # 30초 경과후 도움요청
-                self.send_help_point()()
-                # 도움요청후 프리도킹 위치로 이동
-                self.go_predock()
-                # 도킹
-                self.do_dock()
-
-            else:
-                self.node.get_logger().warn("❌ 화재를 찾지 못해 다음방으로 감.")
-                self.move_to_wp_a3(); self.wait_for_nav(step_name="wp_a3")
+            # 2) Namespace별 경로
+            if self.namespace == "/robot2":
+                # robot2 -> 장소 A 루트 (a1->a2->a3)
+                self.node.get_logger().info("Starting Mission.")
+                self.move_to_wp_a1(); self.wait_for_nav(step_name="wp_a1")
+                self.move_to_wp_a2(); self.wait_for_nav(step_name="wp_a2")
+    
                 found = self.spin_and_search_fire(timeout=15.0)  
                 if found:
                     self.moving_pub.publish(String(data="화재 접근 중"))
                     # 찾은 상태에서 그대로 접근 시작
                     self.action_approach_fire()
                     # 30초 경과후 도움요청
-                    self.send_help_point()()   
+                    self.send_help_point()()
                     # 도움요청후 프리도킹 위치로 이동
                     self.go_predock()
                     # 도킹
-                    self.do_dock()  
+                    self.action_undock()
 
-        elif self.namespace == "/robot6":
-            # robot6 -> 장소 B 루트 (b1->b2)
-            self.move_to_wp_b1(); self.wait_for_nav(step_name="wp_b1")
-            if self._handle_help_interrupt_robot6(step_name="after_wp_b1"):
-                return
-            self.move_to_wp_b2(); self.wait_for_nav(step_name="wp_b2")
-            if self._handle_help_interrupt_robot6(step_name="after_wp_b2"):
-                return
-            self.node.get_logger().info("[Action3] robot6: help 대기 모드 진입")
+                else:
+                    self.node.get_logger().warn("❌ 화재를 찾지 못해 다음방으로 감.")
+                    self.move_to_wp_a3(); self.wait_for_nav(step_name="wp_a3")
+                    found = self.spin_and_search_fire(timeout=15.0)  
+                    if found:
+                        self.moving_pub.publish(String(data="화재 접근 중"))
+                        # 찾은 상태에서 그대로 접근 시작
+                        self.action_approach_fire()
+                        # 30초 경과후 도움요청
+                        self.send_help_point()()   
+                        # 도움요청후 프리도킹 위치로 이동
+                        self.go_predock()
+                        # 도킹
+                        self.action_undock()  
 
-            while rclpy.ok():
-                # ✅ 도움 들어오면 즉시 이동
-                if self._handle_help_interrupt_robot6(step_name="wait_loop"):
+            elif self.namespace == "/robot6":
+                # robot6 -> 장소 B 루트 (b1->b2)
+                self.move_to_wp_b1(); self.wait_for_nav(step_name="wp_b1")
+                if self._handle_help_interrupt_robot6(step_name="after_wp_b1"):
                     return
+                self.move_to_wp_b2(); self.wait_for_nav(step_name="wp_b2")
+                if self._handle_help_interrupt_robot6(step_name="after_wp_b2"):
+                    return
+                self.node.get_logger().info("[Action3] robot6: help 대기 모드 진입")
 
-                # 대기 중에도 안전하게 정지 유지
-                self.stop_robot()
-                time.sleep(0.2)
+                while rclpy.ok():
+                    # ✅ 도움 들어오면 즉시 이동
+                    if self._handle_help_interrupt_robot6(step_name="wait_loop"):
+                        return
+
+                    # 대기 중에도 안전하게 정지 유지
+                    self.stop_robot()
+                    time.sleep(0.2)
                 
-
-
-#####################################################
-        
-
-        
 
         ############################################################
         #--------------------------------------------------------
@@ -1048,4 +1044,16 @@ class RobotActionLib:
                 
         except Exception as e:
             self.node.get_logger().error(f"JSON 파싱 에러: {e}")
-    
+
+    def action_undock(self):
+        if self.nav.getDockedStatus():
+            self.node.get_logger().info("[ActionLib] 도킹 해제 시작")
+            self.nav.undock()
+            self.wait_for_nav(timeout=15.0, step_name="undock")
+        self.trigger_beep()
+
+    def action_dock(self):
+        if not self.navigator.getDockedStatus():
+            self.node.get_logger().info('[ActionLib] 도킹 상태가 아닙니다. 도킹을 시도합니다.')
+            self.navigator.dock()
+            self.wait_for_nav(timeout=15.0, step_name="dock")

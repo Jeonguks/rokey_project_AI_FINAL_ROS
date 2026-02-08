@@ -300,7 +300,7 @@ class FullSequenceTest(Node):
 
                 self.is_mission_running = True
                 try:
-                    self.actions.action_6()
+                    self.actions.action_3()
 
                 except Exception as e:
                     self.get_logger().error(f"[Mission] failed: {e}")
