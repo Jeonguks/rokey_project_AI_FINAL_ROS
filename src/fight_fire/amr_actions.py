@@ -254,6 +254,10 @@ class RobotActionLib:
 
 
     def action_3(self):
+        '''
+        A방에 불이 나서 A로봇이 불 끄러가고, B로봇이 B방에 사람 있는지 보러 가는 시나리오
+        30초후 B에게 도움 요청
+        '''
         # Undock
         self.action_undock()
         # 도킹이 아직 풀리지 않았으면 미션 중단(안전)
@@ -314,7 +318,55 @@ class RobotActionLib:
                 self.cmd_vel_pub.publish(Twist())
                 time.sleep(0.2)
                 
+    def action_4(self):
+        '''
+        B방에 불이 나서 B로봇이 불 끄러가고, A로봇이 A방에 사람 있는지 보러 가는 시나리오
+        30초후 A에게 도움 요청
+        '''
+        # Undock
+        self.action_undock()
+        # 도킹이 아직 풀리지 않았으면 미션 중단(안전)
+        if self.nav.getDockedStatus():
+            self.node.get_logger().error("[Action3] undock 실패 -> 중단")
+            return
+        
+        # 2) Namespace별 경로
+        if self.namespace == "/robot6":
+            # robot2 -> 장소 A 루트 (a1->a2->a3)
+            self.node.get_logger().info("Starting Mission.")
+            self.move_to_wp_a1(); self.wait_for_nav(step_name="wp_a1")
+            self.move_to_wp_a2(); self.wait_for_nav(step_name="wp_a2")
 
+            found = self.spin_and_search_fire(timeout=15.0)  
+            if found:
+                self.moving_pub.publish(String(data="화재 접근 중"))
+                # 찾은 상태에서 그대로 접근 시작
+                self.action_approach_fire()
+                # 30초 경과후 도움요청
+                self.send_help_point(self.robot_x, self.robot_y)
+                # 도움요청후 프리도킹 위치로 이동
+                self.go_predock()
+                # 도킹
+                self.action_dock()
+
+        elif self.namespace == "/robot2":
+            # robot6 -> 장소 B 루트 (b1->b2)
+            self.move_to_wp_b1(); self.wait_for_nav(step_name="wp_b1")
+            if self._handle_help_interrupt_robot6(step_name="after_wp_b1"):
+                return
+            self.move_to_wp_b2(); self.wait_for_nav(step_name="wp_b2")
+            if self._handle_help_interrupt_robot6(step_name="after_wp_b2"):
+                return
+            self.node.get_logger().info("[Action3] robot6: help 대기 모드 진입")
+
+            while rclpy.ok():
+                # ✅ 도움 들어오면 즉시 이동
+                if self._handle_help_interrupt_robot6(step_name="wait_loop"):
+                    return
+
+                # 대기 중에도 안전하게 정지 유지
+                self.cmd_vel_pub.publish(Twist())
+                time.sleep(0.2)
         ############################################################
         #--------------------------------------------------------
         # 대피 가이드 -> 
@@ -334,7 +386,7 @@ class RobotActionLib:
         #
 
         ###############################################3
-    def action_4(self):
+    def action_14(self):
         # 언제든 상관없이 누워있는 사람 (Down)발견 하면 다른 로봇에게 좌표 전송
         #좌표전송은 pub _target_point파일 참고
         pass
