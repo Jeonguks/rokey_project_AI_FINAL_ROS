@@ -20,39 +20,62 @@ class DoActionNode(Node):
     # Actions
     # =========================================================
     
-    def action_1(self):
+    def action_1(self) -> bool:
         """
-        양쪽방에 불났음 
-        FullSequenceTest에서 code == 'afbfc?'일 때 호출.
-        ns에 따라 robot2/robot6 이동 루트를 분기.
+        양쪽방 화재 미션.
+        return: True(미션 성공) / False(실패 or 중단)
         """
         ns = self.node.get_namespace()
         self.node.get_logger().info(f"[Action1] start (ns={ns})")
 
-        self.trigger_beep()
-        self.actions.action_undock()
+        self.actions.trigger_beep()
 
-        # Namespace별 경로
+        # 1) 언도킹 (실패하면 종료)
+        if not self.actions.action_undock():   # <- action_undock()을 bool 반환으로 바꿔라
+            self.node.get_logger().warn("[Action1] undock 실패 -> 미션 중단")
+            self.actions.trigger_beep_err()
+            return False
+
+        # 2) namespace별 목적지 이동
         if ns == "/robot2":
-            # robot2 -> 장소 A 루트 (a1->a2->a3)
-            self.actions.move_to_wp_a1(); self.wait_for_nav(step_name="wp_a1")
-            self.actions.move_to_wp_a2(); self.wait_for_nav(step_name="wp_a2")
-            self.actions.move_to_wp_a3(); self.wait_for_nav(step_name="wp_a3")
-            
-
+            ok = self.actions.go_to_A()
         elif ns == "/robot6":
-            # robot6 -> 장소 B 루트 (b1->b2)
-            self.actions.move_to_wp_b1(); self.wait_for_nav(step_name="wp_b1")
-            self.actions.move_to_wp_b2(); self.wait_for_nav(step_name="wp_b2")
-
+            ok = self.actions.go_to_B()        
         else:
-            self.node.get_logger().warn(
-                f"[Action1] unknown namespace: {ns}. "
-                "실행 시 --ros-args -r __ns:=/robot2 또는 /robot6 로 지정했는지 확인"
-            )
-            return
+            self.node.get_logger().warn(f"[Action1] 알 수 없는 ns={ns}")
+            self.actions.trigger_beep_err()
+            return False
 
-        self.node.get_logger().info("[Action1] done")
+        if not ok:
+            self.node.get_logger().warn("[Action1] 방 이동 실패 -> 복구 시도: 도킹")
+            # 도킹도 실패할 수 있으니 결과 확인
+            dock_ok = self.actions.action_dock()
+            if dock_ok:
+                self.node.get_logger().info("[Action1] 도킹 복구 성공 -> 미션 실패 종료")
+            else:
+                self.node.get_logger().error("[Action1] 도킹 복구 실패 -> 수동조작 필요(정지/알림)")
+                self.actions.trigger_beep_err()
+            return False
+
+        search_ok = self.actions.spin_and_search_fire()
+        if search_ok:
+            self.actions.fire_search_and_chase()
+        # 3) 탐색
+        if not self.actions.spin_and_search_fire():
+            self.node.get_logger().warn("[Action1] 화재 탐색 실패 -> 도킹(또는 홈)")
+            self.actions.action_dock()
+            return False
+
+        # 4) 접근
+        if not self.actions.action_approach_fire():  # <- bool로
+            self.node.get_logger().warn("[Action1] 화재 접근 실패 -> 도킹(또는 재탐색)")
+            self.actions.trigger_beep_err()
+            self.actions.action_dock()
+            return False
+
+        self.node.get_logger().info("[Action1] success")
+        self.actions.trigger_beep_ok()
+        return True
 
 
     def action_2(self):

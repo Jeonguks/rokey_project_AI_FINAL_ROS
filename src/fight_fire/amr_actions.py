@@ -204,30 +204,30 @@ class RobotActionLib:
             goal_pose = self.navigator.getPoseStamped([self.predock_pose_robot6["x"], self.predock_pose_robot6["y"]], TurtleBot4Directions.NORTH)
             self.navigator.startToPose(goal_pose)
 
-    def move_to_wp_b1(self):
-        self.node.get_logger().info("Action: Moving to WP_B1")
-        goal_pose = self.navigator.getPoseStamped([0.6461, 2.7294], TurtleBot4Directions.NORTH)
-        self.navigator.startToPose(goal_pose)
+    # def move_to_wp_b1(self):
+    #     self.node.get_logger().info("Action: Moving to WP_B1")
+    #     goal_pose = self.navigator.getPoseStamped([0.6461, 2.7294], TurtleBot4Directions.NORTH)
+    #     self.navigator.startToPose(goal_pose)
 
-    def move_to_wp_b2(self):
-        self.node.get_logger().info("Action: Moving to WP_B2")
-        goal_pose = self.navigator.getPoseStamped([2.0303, 2.1183], TurtleBot4Directions.NORTH)
-        self.navigator.startToPose(goal_pose)
+    # def move_to_wp_b2(self):
+    #     self.node.get_logger().info("Action: Moving to WP_B2")
+    #     goal_pose = self.navigator.getPoseStamped([2.0303, 2.1183], TurtleBot4Directions.NORTH)
+    #     self.navigator.startToPose(goal_pose)
 
-    def move_to_wp_a1(self):
-        self.node.get_logger().info("Action: Moving to WP_A1")
-        goal_pose = self.navigator.getPoseStamped([3.9223, -0.3839], TurtleBot4Directions.NORTH)
-        self.navigator.startToPose(goal_pose)
+    # def move_to_wp_a1(self):
+    #     self.node.get_logger().info("Action: Moving to WP_A1")
+    #     goal_pose = self.navigator.getPoseStamped([3.9223, -0.3839], TurtleBot4Directions.NORTH)
+    #     self.navigator.startToPose(goal_pose)
 
-    def move_to_wp_a2(self):
-        self.node.get_logger().info("Action: Moving to WP_A2")
-        goal_pose = self.navigator.getPoseStamped([3.3106, -1.7768], TurtleBot4Directions.NORTH)
-        self.navigator.startToPose(goal_pose)
+    # def move_to_wp_a2(self):
+    #     self.node.get_logger().info("Action: Moving to WP_A2")
+    #     goal_pose = self.navigator.getPoseStamped([3.3106, -1.7768], TurtleBot4Directions.NORTH)
+    #     self.navigator.startToPose(goal_pose)
 
-    def move_to_wp_a3(self):
-        self.node.get_logger().info("Action: Moving to WP_A3")
-        goal_pose = self.navigator.getPoseStamped([3.1855, -3.7011], TurtleBot4Directions.NORTH)
-        self.navigator.startToPose(goal_pose)
+    # def move_to_wp_a3(self):
+    #     self.node.get_logger().info("Action: Moving to WP_A3")
+    #     goal_pose = self.navigator.getPoseStamped([3.1855, -3.7011], TurtleBot4Directions.NORTH)
+    #     self.navigator.startToPose(goal_pose)
 
     def perform_spin(self, duration=10.0):
         self.node.get_logger().info("Action: Spinning")
@@ -297,15 +297,9 @@ class RobotActionLib:
         return True
 
 
-    def go_to_A(self):
-        # Start on dock
-        if self.nav.getDockedStatus():
-            self.node.get_logger().info("🔌 Undocking first...")
-            self.nav.undock()
-
+    def go_to_A(self)->Bool:
         # Wait for Nav2
         self.nav.waitUntilNav2Active()
-
         # Set goal poses
         goal_pose = []
         goal_pose.append(self.nav.getPoseStamped([3.9223, -0.3839], TurtleBot4Directions.SOUTH_EAST))
@@ -313,12 +307,11 @@ class RobotActionLib:
 
         # Navigate through poses
         self.nav.startThroughPoses(goal_pose)
-
+    
         # 2. 도착할 때까지 기다리는 루프 (가장 중요!)
         while not self.nav.isTaskComplete():
-            feedback = self.nav.getFeedback()
-            # 필요하다면 여기서 남은 거리 등을 로그로 찍을 수 있습니다.
-            # self.get_logger().info(f'이동 중... 남은 거리: {feedback.distance_remaining}')
+            #feedback = self.nav.getFeedback()
+            #self.get_logger().info(f'이동 중... 남은 거리: {feedback.distance_remaining}')
             
             # 0.1초 정도 대기하며 루프 반복 (CPU 과부하 방지)
             # rclpy.spin_once() 같은 처리가 필요할 수도 있음 (구조에 따라 다름)
@@ -347,6 +340,41 @@ class RobotActionLib:
     def go_to_A_enterence(self):
         goal_pose = self.nav.getPoseStamped([3.92, -1.09], TurtleBot4Directions.SOUTH_EAST)
         self.nav.startToPose(goal_pose)
+
+    def go_to_B(self):
+         # Wait for Nav2
+        self.nav.waitUntilNav2Active()
+        # Set goal poses
+        goal_pose = []
+        goal_pose.append(self.nav.getPoseStamped([0.6461, 2.7294], TurtleBot4Directions.NORTH))
+        goal_pose.append(self.nav.getPoseStamped([2.0303, 2.1183], TurtleBot4Directions.NORTH))
+
+        # Navigate through poses
+        self.nav.startThroughPoses(goal_pose)
+    
+        # 2. 도착할 때까지 기다리는 루프 (가장 중요!)
+        while not self.nav.isTaskComplete():
+            #feedback = self.nav.getFeedback()
+            #self.get_logger().info(f'이동 중... 남은 거리: {feedback.distance_remaining}')
+            
+            # 0.1초 정도 대기하며 루프 반복 (CPU 과부하 방지)
+            # rclpy.spin_once() 같은 처리가 필요할 수도 있음 (구조에 따라 다름)
+            pass
+
+        # 3. 루프가 끝나면(도착하거나 취소되면) 최종 결과 확인
+        result = self.nav.getResult()
+        
+        if result == TaskResult.SUCCEEDED:
+            self.node.get_logger().info("✅ B방 진입 완료 (성공)")
+            return True
+        elif result == TaskResult.CANCELED:
+            self.node.get_logger().info("⚠️ 이동 취소됨")
+            return False
+        elif result == TaskResult.FAILED:
+            self.node.get_logger().info("❌ 이동 실패 (경로 막힘 등)")
+            return False
+        else:
+            return False       
 
     def guide_sequence(self):
         self.node.get_logger().info("Step 3: Guiding to Evacuation Point...")
@@ -568,6 +596,53 @@ class RobotActionLib:
             AudioNote(frequency=349, max_runtime=Duration(seconds=0, nanoseconds=300000000).to_msg()),
             AudioNote(frequency=392, max_runtime=Duration(seconds=0, nanoseconds=300000000).to_msg()),
         ]
+        self.audio_pub.publish(msg)
+
+    def trigger_beep_err(self):
+        now = time.time()
+        if now - self.last_beep_time < 10.0:
+            return
+        self.last_beep_time = now
+
+        msg = AudioNoteVector()
+
+        # 환경에 따라 append 필드가 없을 수 있음
+        try:
+            msg.append = False
+        except Exception:
+            pass
+
+        msg.notes = [
+            AudioNote(frequency=880, max_runtime=Duration(seconds=0, nanoseconds=300000000).to_msg()),
+            AudioNote(frequency=880, max_runtime=Duration(seconds=0, nanoseconds=300000000).to_msg()),
+            AudioNote(frequency=880, max_runtime=Duration(seconds=0, nanoseconds=300000000).to_msg()),
+
+        ]
+
+        self.audio_pub.publish(msg)
+
+    def trigger_beep_ok(self):
+        now = time.time()
+        if now - self.last_beep_time < 10.0:
+            return
+        self.last_beep_time = now
+
+        msg = AudioNoteVector()
+
+        # 환경에 따라 append 필드가 없을 수 있음
+        try:
+            msg.append = False
+        except Exception:
+            pass
+
+        msg.notes = [
+            AudioNote(frequency=523, max_runtime=Duration(seconds=0, nanoseconds=300000000).to_msg()),
+            AudioNote(frequency=659, max_runtime=Duration(seconds=0, nanoseconds=300000000).to_msg()),
+            AudioNote(frequency=784, max_runtime=Duration(seconds=0, nanoseconds=300000000).to_msg()),
+            AudioNote(frequency=1046, max_runtime=Duration(seconds=0, nanoseconds=300000000).to_msg()),
+
+        ]
+
         self.audio_pub.publish(msg)
 
     def fire_search_and_chase(
