@@ -138,31 +138,6 @@ class RobotActionLib:
             goal_pose = self.navigator.getPoseStamped([self.predock_pose_robot6["x"], self.predock_pose_robot6["y"]], TurtleBot4Directions.NORTH)
             self.navigator.startToPose(goal_pose)
 
-    # def move_to_wp_b1(self):
-    #     self.node.get_logger().info("Action: Moving to WP_B1")
-    #     goal_pose = self.navigator.getPoseStamped([0.6461, 2.7294], TurtleBot4Directions.NORTH)
-    #     self.navigator.startToPose(goal_pose)
-
-    # def move_to_wp_b2(self):
-    #     self.node.get_logger().info("Action: Moving to WP_B2")
-    #     goal_pose = self.navigator.getPoseStamped([2.0303, 2.1183], TurtleBot4Directions.NORTH)
-    #     self.navigator.startToPose(goal_pose)
-
-    # def move_to_wp_a1(self):
-    #     self.node.get_logger().info("Action: Moving to WP_A1")
-    #     goal_pose = self.navigator.getPoseStamped([3.9223, -0.3839], TurtleBot4Directions.NORTH)
-    #     self.navigator.startToPose(goal_pose)
-
-    # def move_to_wp_a2(self):
-    #     self.node.get_logger().info("Action: Moving to WP_A2")
-    #     goal_pose = self.navigator.getPoseStamped([3.3106, -1.7768], TurtleBot4Directions.NORTH)
-    #     self.navigator.startToPose(goal_pose)
-
-    # def move_to_wp_a3(self):
-    #     self.node.get_logger().info("Action: Moving to WP_A3")
-    #     goal_pose = self.navigator.getPoseStamped([3.1855, -3.7011], TurtleBot4Directions.NORTH)
-    #     self.navigator.startToPose(goal_pose)
-
     def perform_spin(self, duration=10.0):
         self.node.get_logger().info("Action: Spinning")
         self.navigator.spin(spin_dist=6.28, time_allowance=duration)
@@ -782,9 +757,8 @@ class RobotActionLib:
         else:
             self.node.get_logger().warn("⚠️ [Guide] 사람이 아직 안 보이지만 일단 시작합니다.")
 
-        # 대피소 좌표 (테스트용 좌표)
-        goal_x, goal_y = 3.92, -1.09 
-        # 실제 사용 시: goal_x, goal_y = 0.972021, 0.383458
+        # 대피소 좌표
+        goal_x, goal_y = 0.972021, 0.383458
         
         target_pose = self.navigator.getPoseStamped([goal_x, goal_y], TurtleBot4Directions.SOUTH_EAST)
         

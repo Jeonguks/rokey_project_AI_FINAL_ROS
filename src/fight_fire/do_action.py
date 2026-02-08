@@ -155,9 +155,7 @@ class DoActionNode(Node):
         '''
         self.node.get_logger().info(f"[Action1] start (ns={self.ns})")
         self.actions.trigger_beep()
-        # Undock
-        self.action_undock()
-        # 도킹이 아직 풀리지 않았으면 미션 중단(안전)
+        # Undock-> 도킹이 아직 풀리지 않았으면 미션 중단
         if not self.actions.action_undock():
             self.node.get_logger().warn("[Action1] undock 실패 -> 미션 중단")
             self.actions.trigger_beep_err()
@@ -222,136 +220,80 @@ class DoActionNode(Node):
                 self.node.get_logger().error(f"[Action2] 구조 실패: {e}")
                 self.actions.trigger_beep_err()
                 return False
-            
-
-            
-
-
 
     def action_3(self) -> bool:
         '''
-
+        B방에 불이 나고 A방에 사람이 있는 경우
+        미션성공 -> True, 실패 -> False
         '''
-        pass
+        self.node.get_logger().info(f"[Action2] start (ns={self.ns})")
+        self.actions.trigger_beep()
 
+        # Undock-> 도킹이 아직 풀리지 않았으면 미션 중단
+        if not self.actions.action_undock():
+            self.node.get_logger().warn("[Action2] undock 실패 -> 미션 중단")
+            self.actions.trigger_beep_err()
+            return False
 
-
-
-    def action_4(self):
-        '''
-        B방에 불이 나서 B로봇이 불 끄러가고, A로봇이 A방에 사람 있는지 보러 가는 시나리오
-        30초후 A에게 도움 요청
-        '''
-        # Undock
-        self.action_undock()
-        # 도킹이 아직 풀리지 않았으면 미션 중단(안전)
-        if self.nav.getDockedStatus():
-            self.node.get_logger().error("[Action3] undock 실패 -> 중단")
-            return
-        
-        # 2) Namespace별 경로
-        if self.namespace == "/robot6":
-            # robot2 -> 장소 A 루트 (a1->a2->a3)
-            self.node.get_logger().info("Starting Mission.")
-            self.move_to_wp_a1(); self.wait_for_nav(step_name="wp_a1")
-            self.move_to_wp_a2(); self.wait_for_nav(step_name="wp_a2")
-
-            found = self.spin_and_search_fire(timeout=15.0)  
-            if found:
-                self.moving_pub.publish(String(data="화재 접근 중"))
-                # 찾은 상태에서 그대로 접근 시작
-                self.action_approach_fire()
-                # 30초 경과후 도움요청
-                self.send_help_point(self.robot_x, self.robot_y)
-                # 도움요청후 프리도킹 위치로 이동
-                self.go_predock()
-                # 도킹
-                self.action_dock()
-
-        elif self.namespace == "/robot2":
-            # robot6 -> 장소 B 루트 (b1->b2)
-            self.move_to_wp_b1(); self.wait_for_nav(step_name="wp_b1")
-            if self._handle_help_interrupt_robot6(step_name="after_wp_b1"):
-                return
-            self.move_to_wp_b2(); self.wait_for_nav(step_name="wp_b2")
-            if self._handle_help_interrupt_robot6(step_name="after_wp_b2"):
-                return
-            self.node.get_logger().info("[Action3] robot6: help 대기 모드 진입")
-
-            while rclpy.ok():
-                # ✅ 도움 들어오면 즉시 이동
-                if self._handle_help_interrupt_robot6(step_name="wait_loop"):
-                    return
-
-                # 대기 중에도 안전하게 정지 유지
-                self.cmd_vel_pub.publish(Twist())
-                time.sleep(0.2)
-        ############################################################
-        #--------------------------------------------------------
-        # 대피 가이드 -> 
-        # 일단 입구로 이동 
-        # 입구 이동후 확인 
-        # 3초마다 뒤돌기 도착할떄 까지 
-        # 대피 다시키면 ? 도움요청 없으면 복도 순회, 도움요청 있으면 도와주러 가기 -> 우선순위는 사람 대피  
-        #----------------------------------------------------------
-
-        # 끝나면 순회 
-
-
-        # TODO 객체 탐지 결과에 맞게 변수로 설정해야함 
-        # 서있는 사람 탐지 결과 받아야 하므로 cls = stand 
-
-
-        #
-
-        ###############################################3
-    def action_14(self):
-        # 언제든 상관없이 누워있는 사람 (Down)발견 하면 다른 로봇에게 좌표 전송
-        #좌표전송은 pub _target_point파일 참고
-        pass
-
-    def action_5(self):
-        # 시작은 대피중인 로봇이 도움핑 받으면 무조건 사람부터 대기 시킴 
-        # 진화작업 30초 지나면 다른로봇에게 도움 요청하기. 
-        # 좌표전송
-        # 30초 지난 로봇은 잠시 비켜있기
-        # 도움 핑 받은 로봇은 그곳으로 가기
-        # 도움 핑 받은 로봇은 불 끄기 
-        # 나와있는로봇은 순회모드, 
-        # 충돌 피할 수 있으면 교차 하든가 ㅋㅋ 
-        pass
-
-
-    def action_6(self):
-        # 불끄고 30초 지나면 도와주러 오는지 테스트
-
-        found = self.spin_and_search_fire(timeout=15.0)  
-        if found:
-            self.moving_pub.publish(String(data="화재 접근 중"))
-            # 찾은 상태에서 그대로 접근 시작
-            self.action_approach_fire()
-            # 30초 경과후 도움요청
-            self.send_help_point()
-            # 도움요청후 프리도킹 위치로 이동
-            self.go_predock()
-            # 도킹
-            self.action_dock()
-
+        # 2) namespace별 목적지 이동 (뒤집기)
+        # - robot2: A방(사람)으로
+        # - robot6: B방(불)로
+        if self.ns == "/robot2":
+            ok = self.actions.go_to_A()   # 사람 있는 A
+        elif self.ns == "/robot6":
+            ok = self.actions.go_to_B()   # 불 난 B
         else:
-            self.node.get_logger().warn("❌ 화재를 찾지 못해 접근 단계를 건너뜁니다.")    
+            self.node.get_logger().warn(f"[Action2] 알 수 없는 ns={self.ns}")
+            self.actions.trigger_beep_err()
+            return False
 
+        if not ok:
+            self.node.get_logger().warn("[Action2] 방 이동 실패 -> 복구 시도: 도킹")
+            dock_ok = self.actions.action_dock()
+            if dock_ok:
+                self.node.get_logger().info("[Action2] 도킹 복구 성공 -> 미션 실패 종료")
+            else:
+                self.node.get_logger().error("[Action2] 도킹 복구 실패 -> 수동조작 필요(정지/알림)")
+                self.actions.trigger_beep_err()
+            return False
 
-    def action_7(self):
-        if self.namespace == "/robot2":
-            # robot2 -> 장소 A 루트 (a1->a2->a3)
-            self.node.get_logger().info("Starting Mission.")
+        # 3) 시퀀스 수행 (뒤집기)
+        # - robot6: B 화재 진압
+        # - robot2: A 인명 구조/에스코트
+        if self.ns == "/robot6":
+            self.node.get_logger().info("[Action2] B 화재 진압 시퀀스 시작")
+            mission_success = self.actions.fire_suppression_mission()
 
-            
+            if mission_success:
+                self.node.get_logger().info("[Action2] 화재 진압 성공! 미션 완료.")
+                self.actions.trigger_beep_ok()
 
-        elif self.namespace == "/robot6":
-            # robot6 -> 장소 B 루트 (b1->b2)
-            self.move_to_wp_b1(); self.wait_for_nav(step_name="wp_b1")
-            self.move_to_wp_b2(); self.wait_for_nav(step_name="wp_b2")       
+                # 성공 후 복귀
+                self.actions.go_predock()
+                self.actions.action_dock()
+                return True
+            else:
+                self.node.get_logger().error("[Action2] 화재 진압 실패 (타임아웃 또는 오류)")
+                self.actions.trigger_beep_err()
+                return False
+
+        elif self.ns == "/robot2":
+            self.node.get_logger().info("[Action2] A 인명 구조(에스코트) 시퀀스 시작")
+            try:
+                self.actions.guide_human_sequence()
+
+                self.node.get_logger().info("[Action2] 인명 구조 완료! 복귀합니다.")
+                self.actions.trigger_beep_ok()
+
+                # 복귀 및 도킹
+                self.actions.go_predock()
+                self.actions.action_dock()
+                return True
+
+            except Exception as e:
+                self.node.get_logger().error(f"[Action2] 구조 실패: {e}")
+                self.actions.trigger_beep_err()
+                return False
 
 def main(args=None):
     rclpy.init(args=args)
