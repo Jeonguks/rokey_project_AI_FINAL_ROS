@@ -294,12 +294,21 @@ class RobotActionLib:
 
     def manual_rotate_180(self):
         twist = Twist()
-        twist.angular.z = 0.5
-        duration = math.pi / 0.5  # ~6.28s
-        start = time.time()
-        while time.time() - start < duration and rclpy.ok():
+        angular_speed = 0.6 # 속도를 조금 더 높여서 관성을 이기게 설정
+        twist.angular.z = angular_speed
+
+        # 실측을 통해 보정값(bias)을 더해주는 것이 좋습니다.
+        # 예: (math.pi / angular_speed) + 0.1
+        duration = math.pi / angular_speed
+
+        self.get_logger().info("Rotating 180 degrees...")
+        start = self.get_clock().now()
+
+        # rclpy.duration을 사용하여 더 정확한 시간 측정
+        while (self.get_clock().now() - start).nanoseconds / 1e9 < duration:
             self.cmd_vel_pub.publish(twist)
-            time.sleep(0.05)
+            time.sleep(0.1)
+
         self.stop_robot()
 
     # ---------------------------
