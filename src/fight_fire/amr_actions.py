@@ -294,21 +294,12 @@ class RobotActionLib:
 
     def manual_rotate_180(self):
         twist = Twist()
-        angular_speed = 0.6 # 속도를 조금 더 높여서 관성을 이기게 설정
-        twist.angular.z = angular_speed
-
-        # 실측을 통해 보정값(bias)을 더해주는 것이 좋습니다.
-        # 예: (math.pi / angular_speed) + 0.1
-        duration = math.pi / angular_speed
-
-        self.get_logger().info("Rotating 180 degrees...")
-        start = self.get_clock().now()
-
-        # rclpy.duration을 사용하여 더 정확한 시간 측정
-        while (self.get_clock().now() - start).nanoseconds / 1e9 < duration:
+        twist.angular.z = 0.5
+        duration = math.pi / 0.5  # ~6.28s
+        start = time.time()
+        while time.time() - start < duration and rclpy.ok():
             self.cmd_vel_pub.publish(twist)
-            time.sleep(0.1)
-
+            time.sleep(0.05)
         self.stop_robot()
 
     # ---------------------------
@@ -385,10 +376,6 @@ class RobotActionLib:
         suppression_start = time.time()
         last_seen_time = time.time()
         help_sent = False
-        try:
-            requests.get("http://192.168.108.200:4000/gpio/high", timeout=1)
-        except requests.exceptions.RequestException:
-            pass
 
         while rclpy.ok():
             now = time.time()
@@ -399,31 +386,49 @@ class RobotActionLib:
             # success if 5s no fire
             if now - last_seen_time > 5.0:
                 self.node.get_logger().info("[Fire] success (5s no fire)")
-                try:
-                    requests.get("http://192.168.108.200:4000/gpio/low", timeout=1)
-                except requests.exceptions.RequestException:
-                    pass
                 self.trigger_beep_ok()
                 return True
 
             # help if 30s and still burning
             if (now - suppression_start > 30.0) and (not help_sent) and (now - last_seen_time < 1.0):
                 self.node.get_logger().warn("[Fire] help request (30s)")
-                try:
-                    requests.get("http://192.168.108.200:4000/gpio/low", timeout=1)
-                except requests.exceptions.RequestException:
-                    pass
                 if self.robot_x is not None and self.robot_y is not None:
                     self.send_help_point(self.robot_x, self.robot_y)
                 self.trigger_beep()
                 help_sent = True
                 return False
 
+            if self.target_fire is None:
+                self.manual_forward(0.0)
+                time.sleep(0.1)
+                continue
+
+            cx = float(self.target_fire.get("cx", img_center_x))
+            dist = float(self.target_fire.get("dist", 999.0))
+
+            error_x = img_center_x - cx
+            angular_z = max(min(0.002 * error_x, 0.4), -0.4)
+            if abs(error_x) < center_tol:
+                angular_z = 0.0
+
+            linear_x = 0.0
+            dist_err = dist - target_dist
+
+            if abs(error_x) < 100:
+                if dist > target_dist + dist_tol:
+                    linear_x = 0.15
+                elif dist < target_dist - dist_tol:
+                    linear_x = -0.05
+                else:
+                    self.stop_robot()
+                    break
+
+            tw = Twist()
+            tw.linear.x = float(linear_x)
+            tw.angular.z = float(angular_z)
+            self.cmd_vel_pub.publish(tw)
             time.sleep(0.1)
-            try:
-                requests.get("http://192.168.108.200:4000/gpio/low", timeout=1)
-            except requests.exceptions.RequestException:
-                pass
+
         return False
 
     # ---------------------------

@@ -12,6 +12,32 @@ import tf2_ros
 import time
 import json
 
+
+'''
+[
+  {
+    "class": "fire",
+    "conf": 0.91,
+    "dist": 1.42,
+    "cx": 312,
+    "cy": 241,
+    "width": 88,
+    "height": 95
+  },
+  {
+    "class": "stand",
+    "conf": 0.83,
+    "dist": 2.05,
+    "cx": 520,
+    "cy": 260,
+    "width": 60,
+    "height": 130
+  }
+]
+
+
+'''
+
 class PerceptionNode(Node):
     def __init__(self):
         super().__init__('perception_node')
@@ -33,7 +59,15 @@ class PerceptionNode(Node):
         except Exception as e:
             self.get_logger().error(f'❌ YOLO 로드 실패: {e}')
 
-        # QoS 설정 (BEST_EFFORT로 통신 안정성 확보)
+        # TF 설정
+        self.tf_buffer = tf2_ros.Buffer()
+        self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
+
+        # ---------------------------------------------------------
+        # [핵심] QoS 설정 - "호환성 최강" 설정으로 변경
+        # ---------------------------------------------------------
+        # Reliability: Best Effort (데이터 좀 빠져도 받음)
+        # Durability: Volatile (지나간 건 안 받음)
         qos_profile = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT, 
             history=HistoryPolicy.KEEP_LAST, 
@@ -41,61 +75,62 @@ class PerceptionNode(Node):
             durability=DurabilityPolicy.VOLATILE
         )
         
-        # 1. Depth 구독 (데이터가 오면 변수에 저장만 함)
-        self.depth_sub = self.create_subscription(
-            Image, 
-            f'/{self.namespace}/oakd/stereo/image_raw', 
-            self.depth_callback, 
-            qos_profile
+        self.get_logger().info("⏳ [1단계] 이미지 구독 시작... (CameraInfo 대기중)")
+
+        # 구독 설정
+        self.rgb_sub = message_filters.Subscriber(
+            self, CompressedImage, f'/{self.namespace}/oakd/rgb/image_raw/compressed', qos_profile=qos_profile)
+        self.depth_sub = message_filters.Subscriber(
+            self, Image, f'/{self.namespace}/oakd/stereo/image_raw', qos_profile=qos_profile)
+
+        # ---------------------------------------------------------
+        # [수정] 큐 사이즈 10 + 시간 오차(slop) 2.0초로 대폭 증가
+        # ---------------------------------------------------------
+        # 서로 2초나 차이나도 일단 묶어보라는 뜻 (싱크 문제 해결용)
+        self.sync = message_filters.ApproximateTimeSynchronizer(
+            [self.rgb_sub, self.depth_sub], 
+            queue_size=20, # 넉넉하게
+            slop=2.0       # 2초까지 허용
         )
 
-        # 2. RGB 구독 (메인 트리거: 이 콜백이 실행될 때 추론 시작)
-        self.rgb_sub = self.create_subscription(
-            CompressedImage, 
-            f'/{self.namespace}/oakd/rgb/image_raw/compressed', 
-            self.rgb_callback, 
-            qos_profile
-        )
-
-        # 3. CameraInfo 구독
-        self.info_sub = self.create_subscription(
-            CameraInfo, 
-            f'/{self.namespace}/oakd/rgb/camera_info', 
-            self.info_callback, 
-            qos_profile
-        )
+        # CameraInfo 구독
+        self.create_subscription(CameraInfo, f'/{self.namespace}/oakd/rgb/camera_info', self.info_callback, qos_profile)
 
         # Publisher
         self.detection_pub = self.create_publisher(String, 'perception/detections', 10)
+        # [중요] RViz용 압축 이미지 토픽
         self.debug_pub = self.create_publisher(CompressedImage, f'/{self.namespace}/yolo_debug/compressed', 10)
-        self.log_pub = self.create_publisher(String, '/robot_log', 10)
+        self.marker_pub = self.create_publisher(Marker, f'/{self.namespace}/detection_marker', 10)
 
         self.cv_bridge = CvBridge()
-        self.get_logger().info("👀 Perception Node 시작 (동기화 프리 모드)")
+        self.publish_log("👀 Perception Node 시작됨 (디버깅 모드)")
+
+    def publish_log(self, text):
+        self.get_logger().info(text)
+        msg = String()
+        msg.data = text
+        self.log_pub.publish(msg)
 
     def info_callback(self, msg):
+        # CameraInfo가 들어오는지 확인하는 로그
         if self.camera_intrinsics is None:
+            self.get_logger().info("✅ [2단계] CameraInfo 수신 성공! (이제 sync_callback만 되면 됨)")
             K = msg.k
             self.camera_intrinsics = {'fx': K[0], 'fy': K[4], 'cx': K[2], 'cy': K[5]}
             self.camera_frame_id = msg.header.frame_id 
             self.get_logger().info("✅ CameraInfo 수신 완료")
 
-    def depth_callback(self, msg):
-        # 최신 Depth 데이터를 지속적으로 갱신
-        self.latest_depth_msg = msg
-
-    def rgb_callback(self, rgb_msg):
-        # 1. 처리 주기 조절 (초당 10번 정도)
+    def sync_callback(self, rgb_msg, depth_msg):
+        # 여기가 실행되는지 확인하는 로그 (너무 많이 뜨면 렉걸리니 10번에 1번만)
+        # self.get_logger().info(f"⚡ [3단계] Sync 성공! (RGB: {rgb_msg.header.stamp.sec}, Depth: {depth_msg.header.stamp.sec})")
+        
         current_time = time.time()
-        if current_time - self.last_process_time < 0.1: 
-            return
+        if current_time - self.last_process_time < 0.1: return
         self.last_process_time = current_time
 
-        # 2. 필수 데이터 체크
-        if self.latest_depth_msg is None:
-            self.get_logger().warn("⏳ Depth 대기 중...", throttle_duration_sec=3.0)
-            return
+        # CameraInfo 없으면 진행 불가
         if self.camera_intrinsics is None:
+            self.get_logger().warn("⚠️ 이미지는 들어오는데 CameraInfo가 아직 없습니다!")
             return
 
         # 3. 메인 로직 실행
@@ -103,30 +138,41 @@ class PerceptionNode(Node):
 
     def process_perception(self, rgb_msg, depth_msg):
         try:
-            # 이미지 변환
             frame = self.cv_bridge.compressed_imgmsg_to_cv2(rgb_msg, "bgr8")
+            if frame is None: return
+
             current_depth = self.cv_bridge.imgmsg_to_cv2(depth_msg, desired_encoding='passthrough')
             depth_h, depth_w = current_depth.shape[:2]
 
             # YOLO 추론
             results = self.model(frame, verbose=False)
+            
             detected_objects_list = []
 
             for result in results:
                 for box in result.boxes:
                     cls_id = int(box.cls[0])
                     conf = float(box.conf[0])
+                    class_name = result.names[cls_id]
+                    
+                    # [수정 1] 커트라인을 0.4 -> 0.2로 낮춤 (더 민감하게)
                     if conf < 0.7: continue 
+
+                    # [수정 2] 감지된 건 일단 무조건 터미널에 출력 (디버깅용)
+                    self.get_logger().info(f"🧐 감지됨! -> 이름: {class_name}, 점수: {conf:.2f}")
 
                     class_name = result.names[cls_id]
                     x1, y1, x2, y2 = map(int, box.xyxy[0])
                     cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
                     
-                    # ROI 내 거리 평균 계산
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                    label = f"{class_name} {conf:.2f}"
+                    cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+
+                    # 거리 계산 (간략화)
                     box_w, box_h = x2 - x1, y2 - y1
                     sx1, sx2 = max(0, int(cx - box_w*0.1)), min(depth_w, int(cx + box_w*0.1))
                     sy1, sy2 = max(0, int(cy - box_h*0.1)), min(depth_h, int(cy + box_h*0.1))
-                    
                     depth_roi = current_depth[sy1:sy2, sx1:sx2]
                     valid_depth = depth_roi[depth_roi > 0]
                     dist_m = float(np.median(valid_depth) / 1000.0) if len(valid_depth) > 0 else 0.0
@@ -137,24 +183,26 @@ class PerceptionNode(Node):
                     }
                     detected_objects_list.append(obj_data)
 
-                    # 시각화
-                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                    cv2.putText(frame, f"{class_name} {dist_m:.2f}m", (x1, y1-10), 
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-
-            # 결과 전송
+            # JSON 발행
             if detected_objects_list:
-                self.detection_pub.publish(String(data=json.dumps(detected_objects_list)))
-                self.get_logger().info(f"🔎 Detected: {len(detected_objects_list)} items 이름: {class_name}, conf: {conf:.2f}")
+                json_str = json.dumps(detected_objects_list)
+                self.detection_pub.publish(String(data=json_str))
+                # 감지되면 로그 한번 찍기
+                # self.get_logger().info(f"🔎 감지됨: {json_str}")
 
-            # 디버그 이미지 발행
-            debug_msg = self.cv_bridge.cv2_to_compressed_imgmsg(frame)
-            debug_msg.header.stamp = rgb_msg.header.stamp
-            debug_msg.header.frame_id = self.camera_frame_id
-            self.debug_pub.publish(debug_msg)
+            # [이미지 발행]
+            debug_out = self.cv_bridge.cv2_to_compressed_imgmsg(frame)
+            debug_out.header.stamp = rgb_msg.header.stamp 
+            debug_out.header.frame_id = self.camera_frame_id
+            
+            self.debug_pub.publish(debug_out)
 
         except Exception as e:
-            self.get_logger().error(f'Error in process_perception: {e}')
+            self.get_logger().error(f'Processing Error: {e}')
+
+    # (TF 함수 생략 가능 - 에러 없으면)
+    def get_map_coordinate(self, u, v, dist_m):
+        return None 
 
 def main(args=None):
     rclpy.init(args=args)

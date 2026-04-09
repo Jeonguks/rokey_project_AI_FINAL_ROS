@@ -58,7 +58,6 @@ class TaskControllerNode(Node):
         self._mission_thread.start()
 
         self.get_logger().info("TaskControllerNode ready")
-        self._trigger_enabled = True
 
     # ---------------------------
     # code build helpers
@@ -85,8 +84,6 @@ class TaskControllerNode(Node):
     # callbacks
     # ---------------------------
     def trigger_callback(self, msg: String):
-        if not self._trigger_enabled:
-            return   # ← 이후 들어오는 토픽 전부 무시
         raw = (msg.data or "").strip()
         try:
             data = json.loads(raw)
@@ -98,8 +95,6 @@ class TaskControllerNode(Node):
         with self._code_lock:
             self._latest_code = code
             self._latest_code_time = time.time()
-        self._trigger_enabled = False
-
 
         self.get_logger().info(f"[Trigger RX] code='{code}'")
 
