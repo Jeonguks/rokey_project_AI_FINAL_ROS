@@ -9,10 +9,8 @@ import cv2
 import numpy as np
 from ultralytics import YOLO
 import tf2_ros
-import tf2_geometry_msgs
 import time
 import json
-import message_filters
 
 
 '''
@@ -44,14 +42,15 @@ class PerceptionNode(Node):
     def __init__(self):
         super().__init__('perception_node')
         
-        self.namespace = 'robot6' 
+        # 설정값
+        self.namespace = 'robot2' 
         self.model_path = '/home/rokey/datasets/weights/best_amr_v8n_param_add.pt'
         self.camera_frame_id = ""  
         self.last_process_time = 0.0 
         self.camera_intrinsics = None 
         
-        # 로그 Publisher
-        self.log_pub = self.create_publisher(String, '/robot_log', 10)
+        # [데이터 캐시] 타임스탬프 차이 해결을 위해 최신 데이터를 저장
+        self.latest_depth_msg = None
 
         # YOLO 로드
         try:
@@ -93,7 +92,6 @@ class PerceptionNode(Node):
             queue_size=20, # 넉넉하게
             slop=2.0       # 2초까지 허용
         )
-        self.sync.registerCallback(self.sync_callback)
 
         # CameraInfo 구독
         self.create_subscription(CameraInfo, f'/{self.namespace}/oakd/rgb/camera_info', self.info_callback, qos_profile)
@@ -120,6 +118,7 @@ class PerceptionNode(Node):
             K = msg.k
             self.camera_intrinsics = {'fx': K[0], 'fy': K[4], 'cx': K[2], 'cy': K[5]}
             self.camera_frame_id = msg.header.frame_id 
+            self.get_logger().info("✅ CameraInfo 수신 완료")
 
     def sync_callback(self, rgb_msg, depth_msg):
         # 여기가 실행되는지 확인하는 로그 (너무 많이 뜨면 렉걸리니 10번에 1번만)
@@ -134,6 +133,10 @@ class PerceptionNode(Node):
             self.get_logger().warn("⚠️ 이미지는 들어오는데 CameraInfo가 아직 없습니다!")
             return
 
+        # 3. 메인 로직 실행
+        self.process_perception(rgb_msg, self.latest_depth_msg)
+
+    def process_perception(self, rgb_msg, depth_msg):
         try:
             frame = self.cv_bridge.compressed_imgmsg_to_cv2(rgb_msg, "bgr8")
             if frame is None: return
@@ -158,6 +161,7 @@ class PerceptionNode(Node):
                     # [수정 2] 감지된 건 일단 무조건 터미널에 출력 (디버깅용)
                     self.get_logger().info(f"🧐 감지됨! -> 이름: {class_name}, 점수: {conf:.2f}")
 
+                    class_name = result.names[cls_id]
                     x1, y1, x2, y2 = map(int, box.xyxy[0])
                     cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
                     
@@ -203,9 +207,13 @@ class PerceptionNode(Node):
 def main(args=None):
     rclpy.init(args=args)
     node = PerceptionNode()
-    rclpy.spin(node)
-    node.destroy_node()
-    rclpy.shutdown()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
 
 if __name__ == '__main__':
     main()

@@ -3,6 +3,8 @@ import json
 import math
 import time
 
+import requests
+
 import rclpy
 from rclpy.node import Node
 from rclpy.duration import Duration
@@ -396,6 +398,35 @@ class RobotActionLib:
                 help_sent = True
                 return False
 
+            if self.target_fire is None:
+                self.manual_forward(0.0)
+                time.sleep(0.1)
+                continue
+
+            cx = float(self.target_fire.get("cx", img_center_x))
+            dist = float(self.target_fire.get("dist", 999.0))
+
+            error_x = img_center_x - cx
+            angular_z = max(min(0.002 * error_x, 0.4), -0.4)
+            if abs(error_x) < center_tol:
+                angular_z = 0.0
+
+            linear_x = 0.0
+            dist_err = dist - target_dist
+
+            if abs(error_x) < 100:
+                if dist > target_dist + dist_tol:
+                    linear_x = 0.15
+                elif dist < target_dist - dist_tol:
+                    linear_x = -0.05
+                else:
+                    self.stop_robot()
+                    break
+
+            tw = Twist()
+            tw.linear.x = float(linear_x)
+            tw.angular.z = float(angular_z)
+            self.cmd_vel_pub.publish(tw)
             time.sleep(0.1)
 
         return False
